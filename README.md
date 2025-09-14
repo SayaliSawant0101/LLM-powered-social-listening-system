@@ -76,37 +76,7 @@ All charts support a **confidence slider** and **bot toggle**, and each tab offe
 ---
 
 ## Project Status
-- [x] Data ingestion (Bluesky) + week windowing  
-- [x] Transformer sentiment (calibrated) + confidence slider; exports (`with_sentiment.xlsx`)  
-- [x] Evaluation: manual gold labels; **F1-vs-coverage** sweep  
-- [x] Reporting notebook → `with_sentiment_confidence.xlsx`  
-- [ ] Aspect sentences (ABSA) — model + thresholds + evidence UI  
-- [ ] Topics (BERTopic) — clustering + auto-naming + “emerging” panel  
-- [ ] Event impact — baseline & uplift CI (requires ≥6–8 weeks history for strong CI)  
-- [ ] Influencer ranker — two-tower + roles + drill-downs  
-- [ ] Sponsored detector — high-precision operating point + within-author lift  
-- [ ] Bot filter — fusion classifier + before/after metrics  
-- [ ] Exec brief — schema-constrained LLM + PDF export  
-- [ ] Spaces deployment — public demo URL
-
-> _Add real metrics when ready: Sentiment Macro-F1, ECE/Brier; per-aspect F1; NDCG@k; PR-AUC (sponsored/bots)._
-
----
-
-## Workload Distribution
-| Area | Owner | Responsibilities |
-|---|---|---|
-| Data & Ingestion | \<Your Name\> | ATProto fetch, filtering, dedup, Parquet |
-| Sentiment + Calibration | \<Your Name\> | LoRA fine-tune, temperature scaling, F1@coverage |
-| ABSA (sentence level) | \<Teammate A\> | Multi-task head, thresholds, evidence table |
-| Topics (BERTopic) | \<Teammate B\> | Embeddings cache, clustering, LLM labels |
-| Event Impact | \<Teammate C\> | TFT/NeuralProphet, uplift + CI, spike detector |
-| Influencer Ranker | \<Teammate D\> | Two-tower, NDCG eval, role mapping |
-| Sponsored/Bot | \<Teammate E\> | Weak labels, PR-AUC, operating thresholds |
-| App & Reports | \<Your Name\> | Streamlit/Gradio UI, exports, Spaces deploy |
-| QA & Eval | All | Gold labels, error analysis, demo rehearsal |
-
----
+----
 
 ## Future Roadmap (2-Week Sprints)
 

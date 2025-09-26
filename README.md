@@ -1,7 +1,7 @@
 # Quick description: LLM-powered-social-listening-system
 Building an LLM-powered social listening system to track brand sentiment over time, aspect sentiment (staff, delivery, price, UX), event impact (Black Friday, campaigns), influencer reach + sentiment, and bot filtering, benchmarking with competitors sentiments.
 
-# LLM/DL Social Listening — 1-Week Brand Intelligence (Bluesky)
+# LLM/DL Social Listening — 1-Week Brand Intelligence
 
 > Turn **one week** of public Bluesky posts about a brand (e.g., Walmart) into **decision-grade insights**: trend & spikes, *why* sentiment moved (aspects), emerging themes, event impact, influencer impact, sponsored vs organic, bot filtering, and an exec summary. Ships as a **clickable web app** (Streamlit/Gradio) with CSV/XLSX exports.
 

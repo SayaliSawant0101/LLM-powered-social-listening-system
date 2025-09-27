@@ -1,12 +1,12 @@
 # LLM-powered-social-listening-system
 
-Building an LLM-powered social listening system to track **Walmart’s Twitter trends** — monitoring brand sentiment over time, aspect sentiment (staff, delivery, price, UX), event impact (Black Friday, campaigns), influencer reach + sentiment, and bot filtering, **benchmarking against competitors**.
+Building an LLM-powered social listening system to track **Walmart’s Twitter trends** — monitoring brand sentiment over time, aspect sentiment (staff, delivery, price, UX), event impact (Black Friday, campaigns), influencer reach + sentiment, and bot filtering, benchmarking against competitors and executive brief.
 
 ---
 
-## LLM/DL Social Listening — 1-Week Brand Intelligence
+## LLM/DL Social Listening — Quaterly Brand Intelligence Report
 
-> Turn **one week** of public Twitter posts about **Walmart** into **decision-grade insights**: trend & spikes, *why* sentiment moved (aspects), emerging themes, event impact, influencer impact, sponsored vs organic, bot filtering, **competitor benchmarking**, and an exec summary.  
+> Turn **3-months** of public Twitter posts about **Walmart** into **decision-grade insights**: trend & spikes, *why* sentiment moved (aspects), emerging themes, event impact, influencer impact, sponsored vs organic, bot filtering, competitor benchmarking, and an exec summary.  
 > Ships as a **clickable web app** (Streamlit/Gradio) with CSV/XLSX exports.
 
 ---
@@ -22,7 +22,7 @@ Building an LLM-powered social listening system to track **Walmart’s Twitter t
 ---
 
 ## Description / Overview
-This project is a **modern AI social listening pipeline** (Transformers, sentence embeddings, deep time-series, schema-constrained LLM) that ingests public Twitter posts for a **1-week window** and outputs insights specifically for **Walmart and its competitors**:
+This project is a **modern AI social listening pipeline** (Transformers, sentence embeddings, deep time-series, schema-constrained LLM) that ingests public Twitter posts for a **3-months window** and outputs insights specifically for **Walmart**:
 
 - **Post-level sentiment** with calibrated confidence  
 - **Aspect sentiment** at **sentence** level (price, delivery, returns, staff, app/UX)  
@@ -83,49 +83,45 @@ All charts support a **confidence slider** and **bot toggle**, and each tab offe
 ---
 
 ## Project Status
-🚧 In progress — initial ingestion of **Walmart Twitter data** + baseline sentiment modeling underway.
+🚧 In progress — initial ingestion of **Walmart Twitter data** and exploring baseline sentiment modeling is done.
 
 ---
 
-## Future Roadmap (2-Week Sprints)
+## Future Roadmap (2-Week Sprints) - 
+Track Project Roadmap on Notion: https://www.notion.so/2799430f209580cba14dd7bcab567429?v=2799430f209580128c67000ce95bbbfd&source=copy_link
 
 <details>
 <summary><b>Sprint 1 (Weeks 1–2) — Foundations</b></summary>
 
 - Data ingestion pipeline (Twitter API/Apify → S3 → Glue → Athena)  
 - Baseline post-level sentiment (DeBERTa/RoBERTa + LoRA fine-tuning)  
-- Initial dashboards (time-series, daily sentiment shares)  
-- **Task: Competitor benchmarking for Walmart — establish baseline sentiment vs Target, Amazon, Costco**  
+- Aspect-based sentiment module (delivery, pricing, staff, UX)  
 
 </details>
 
 <details>
 <summary><b>Sprint 2 (Weeks 3–4) — Aspects & Events</b></summary>
 
-- Aspect-based sentiment module (delivery, pricing, staff, UX)  
 - Topic modeling with BERTopic + LLM-generated topic labels  
-- Event impact modeling (NeuralProphet / TFT for Black Friday case)  
-- **Task: Competitor benchmarking for Walmart — aspect-level and event-level comparison**  
+- Event impact modeling (NeuralProphet / TFT for Black Friday case)
+- Influencer modeling (two-tower neural ranker: content × profile) 
 
 </details>
 
 <details>
 <summary><b>Sprint 3 (Weeks 5–6) — Influencers & Bots</b></summary>
 
-- Influencer modeling (two-tower neural ranker: content × profile)  
 - Bot detection (text + behavioral features classifier)  
-- End-to-end pipeline integration in AWS  
-- **Task: Competitor benchmarking for Walmart — influencer roles & bot prevalence vs peers**  
+- Executive brief generator (LLM-powered JSON schema reports)  
 
 </details>
 
 <details>
 <summary><b>Sprint 4 (Weeks 7–8) — Executive & Benchmarking</b></summary>
 
-- Executive brief generator (LLM-powered JSON schema reports)  
 - Walmart vs competitor benchmarking (all modules integrated)  
 - Final evaluation, documentation, and presentation  
-- **Task: Competitor benchmarking for Walmart — integrated executive-level report**  
+- Competitor benchmarking for Walmart — integrated executive-level report
 
 </details>
 
@@ -133,10 +129,10 @@ All charts support a **confidence slider** and **bot toggle**, and each tab offe
 
 ## Authors & Acknowledgements
 
-- **Author:** Sayali Sawant  
-- **Mentor/Guide:** [Insert professor/supervisor name]  
-- **Acknowledgements:**  
-  - Pace University (Capstone Project)  
+**Author:** [Sayali Sawant](https://github.com/SayaliSawant0101)  
+- **Collaborator:** [Harini Balaji](https://github.com/Harini-Balaji11)  
+- **Collaborator:** [Darsh Joshi](https://github.com/darshjoshi)  
+- **Acknowledgements:**   
   - Open-source model providers (Hugging Face, PyTorch, BERTopic, sentence-transformers)  
   - AWS credits & Hugging Face Spaces for compute/deployment  
   - Twitter API / Apify community  

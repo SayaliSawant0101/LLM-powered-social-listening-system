@@ -130,8 +130,7 @@ Track Project Roadmap on Notion: https://www.notion.so/2799430f209580cba14dd7bca
 ## Authors & Acknowledgements
 
 **Author:** [Sayali Sawant](https://github.com/SayaliSawant0101)  
-- **Collaborator:** [Harini Balaji](https://github.com/Harini-Balaji11)  
-- **Collaborator:** [Darsh Joshi](https://github.com/darshjoshi)  
+- **Collaborator:** [Harini Balaji](https://github.com/Harini-Balaji11) and [Darsh Joshi](https://github.com/darshjoshi)  
 - **Acknowledgements:**   
   - Open-source model providers (Hugging Face, PyTorch, BERTopic, sentence-transformers)  
   - AWS credits & Hugging Face Spaces for compute/deployment  

@@ -1,6 +1,6 @@
-
-from __future__ import annotations
-import re
-
-def normalize_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s or "").strip()
+def torch_device_name() -> str:
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"

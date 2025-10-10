@@ -1,0 +1,26 @@
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+
+# Envs
+.venv/
+.env
+
+# Mac / OS
+.DS_Store
+
+# Data & models
+data/*
+!data/.gitkeep
+models/
+.checkpoints/
+
+# Streamlit
+.streamlit/

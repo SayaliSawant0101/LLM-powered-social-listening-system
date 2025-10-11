@@ -24,3 +24,20 @@ frontend/dist/
 
 # Logs
 *.log
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Env & secrets
+.env
+.env.*
+
+# Data artifacts
+data/*.parquet
+data/*.csv
+data/*.xlsx
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/

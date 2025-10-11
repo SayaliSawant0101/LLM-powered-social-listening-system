@@ -1,26 +1,26 @@
-
 # Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-*.egg-info/
-dist/
-build/
-.ipynb_checkpoints/
-
-# Envs
 .venv/
 .env
+.env.*
 
-# Mac / OS
+# Data & artifacts
+data/*.parquet
+data/**/*.parquet
+*.csv
+*.xlsx
+*.ipynb_checkpoints/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/.vite/
+frontend/dist/
+
+# Mac / IDE
 .DS_Store
+.vscode/
+.idea/
 
-# Data & models
-data/*
-!data/.gitkeep
-models/
-.checkpoints/
-
-# Streamlit
-.streamlit/
+# Logs
+*.log

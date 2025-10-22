@@ -1,0 +1,77 @@
+{
+  "updated_at": "2025-10-11T15:33:45.749838+00:00",
+  "themes": [
+    {
+      "id": 11,
+      "name": "\"User Engagement and Feedback Trends\"",
+      "summary": "The feedback theme highlights significant negative sentiment regarding store organization and security concerns, with many customers expressing frustration over product placement and safety issues. To improve engagement, Walmart should focus on enhancing store layouts and addressing security measures to better meet customer expectations.",
+      "tweet_count": 820
+    },
+    {
+      "id": 5,
+      "name": "\"User Satisfaction and Engagement Insights\"",
+      "summary": "Feedback indicates a significant level of dissatisfaction among customers regarding product availability and service reliability, with many expressing frustration over stock shortages and inadequate responses to complaints. To enhance customer satisfaction, Walmart should focus on improving inventory management and communication strategies to address these concerns effectively.",
+      "tweet_count": 635
+    },
+    {
+      "id": 7,
+      "name": "\"User Feedback on Pricing Issues\"",
+      "summary": "The feedback indicates significant negative sentiment surrounding pricing, with many expressing frustration over perceived price gouging and the impact of tariffs on consumer costs. Stakeholders should focus on transparency regarding pricing strategies and consider addressing safety concerns to improve customer trust and shopping experiences.",
+      "tweet_count": 503
+    },
+    {
+      "id": 8,
+      "name": "\"Customer Service and Order Feedback\"",
+      "summary": "Feedback indicates significant frustration with customer service responsiveness, particularly regarding unprocessed returns and delivery issues. Stakeholders should prioritize improving communication and accountability in these areas to enhance customer satisfaction and trust.",
+      "tweet_count": 468
+    },
+    {
+      "id": 0,
+      "name": "User Engagement and Experience Insights",
+      "summary": "Feedback indicates a significant portion of customers express frustration with noise levels in stores and concerns over gender-neutral clothing options for children, suggesting a need for Walmart to reassess its in-store environment and product offerings to better align with customer preferences. Additionally, there is an opportunity to enhance engagement by addressing these specific complaints and fostering a more tailored shopping experience.",
+      "tweet_count": 410
+    },
+    {
+      "id": 9,
+      "name": "\"User Insights: American & Indian Perspectives\"",
+      "summary": "The feedback indicates significant negative sentiment surrounding Walmart's hiring practices, particularly regarding H1B visa employees, with many expressing concerns about perceived favoritism towards Indian workers in management roles. Stakeholders should consider addressing these perceptions by enhancing transparency in hiring processes and promoting diversity initiatives to foster a more inclusive workplace.",
+      "tweet_count": 394
+    },
+    {
+      "id": 1,
+      "name": "\"Walmart User Feedback Insights\"",
+      "summary": "Feedback indicates a mix of positive and negative sentiments, with notable frustration regarding product exclusivity and order fulfillment issues. Stakeholders should focus on improving inventory accessibility and enhancing the reliability of order deliveries to boost customer satisfaction.",
+      "tweet_count": 364
+    },
+    {
+      "id": 2,
+      "name": "\"User Feedback on Price Concerns\"",
+      "summary": "The predominant theme in feedback revolves around significant concerns regarding rising prices, particularly for essential items like coffee, which has seen drastic increases over the past few years. Stakeholders should focus on addressing customer frustrations by enhancing price transparency and exploring strategies to stabilize pricing while improving employee training to enhance customer service experiences.",
+      "tweet_count": 349
+    },
+    {
+      "id": 6,
+      "name": "\"Walmart User Experience Insights\"",
+      "summary": "Feedback indicates significant dissatisfaction with customer service, particularly regarding product accessibility and employee responsiveness, as well as broader concerns about Walmart's impact on local economies. Addressing these service issues and enhancing community engagement could improve overall sentiment and customer loyalty.",
+      "tweet_count": 335
+    },
+    {
+      "id": 3,
+      "name": "\"Walmart User Feedback Insights\"",
+      "summary": "Feedback indicates significant dissatisfaction with customer service, particularly regarding online support and order fulfillment, alongside concerns about community impact and corporate practices. Walmart should prioritize enhancing customer support systems and addressing community relations to improve overall sentiment.",
+      "tweet_count": 328
+    },
+    {
+      "id": 4,
+      "name": "\"User Sentiment on Food Products\"",
+      "summary": "Feedback on Walmart's food products reveals a notable concern regarding product quality, with a significant number of negative sentiments highlighting issues like freshness and availability. To enhance customer satisfaction, it is recommended to focus on improving product sourcing and ensuring better inventory management, particularly for popular items like fresh produce and specialty foods.",
+      "tweet_count": 299
+    },
+    {
+      "id": 10,
+      "name": "\"Radioactive Shrimp User Feedback\"",
+      "summary": "The feedback highlights significant concerns regarding the safety of frozen shrimp sold at Walmart, with many customers expressing fears about potential radioactive contamination as warned by the FDA. It is crucial for Walmart to address these safety concerns transparently and consider enhancing quality assurance measures to restore customer confidence in seafood products.",
+      "tweet_count": 95
+    }
+  ]
+}

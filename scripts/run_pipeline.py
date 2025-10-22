@@ -7,6 +7,10 @@ from src.features.sentiment import ensure_sentiment
 from src.features.absa import ensure_absa
 from src.features.topics import ensure_topics
 
+from src.utils.text import torch_device_name
+
+print(f"[Setup] device: {torch_device_name()}")
+
 def run(path_in: str, path_out: str):
     import pandas as pd
     df = load_any(path_in)

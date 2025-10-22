@@ -1,21 +1,47 @@
 # api/main.py
+from __future__ import annotations
+
+from pathlib import Path
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from datetime import date
+from typing import Optional, Tuple
 import pandas as pd
+import traceback
 import os
+
+# LLM summaries (exec summary + structured brief)
+from src.llm.summary import build_executive_summary, summarize_tweets
+
+# --- Load the repo-root .env no matter where Uvicorn is started from ---
+ROOT_DOTENV = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=ROOT_DOTENV)
+
+def _read_openai_key() -> str:
+    key = os.getenv("OPENAI_API_KEY", "") or ""
+    return key.strip().strip('"').strip("'")
+
+# ---- Theme computation (Stage 3 dynamic) ----
+# requires src/features/themes.py with compute_themes_payload()
+from src.features.themes import compute_themes_payload
 
 # ------------ Paths ------------
 SENTI_PATH   = "data/tweets_stage1_sentiment.parquet"
 ASPECT_PATH  = "data/tweets_stage2_aspects.parquet"
 STAGE3_PATH  = "data/tweets_stage3_aspect_sentiment.parquet"  # optional cache (no dates)
+STAGE3_THEMES_PARQUET = "data/tweets_stage3_themes.parquet"   # written by /themes
 
 app = FastAPI(title="Walmart Social Listener API")
 
-# Allow calls from Vite dev server
+# Allow calls from Vite dev server (add prod origins as needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,27 +70,21 @@ def _sentiment_summary(sub: pd.DataFrame) -> dict:
         pct.setdefault(k, 0.0)
     return {"total": total, "counts": counts, "percent": pct}
 
-def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str]) -> dict:
-    """
-    Build stacked-bar friendly payload from a subset that HAS columns:
-      - aspect_dominant
-      - sentiment_label
-    Returns both counts and percents arrays (aligned to 'aspects').
-    """
+def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str], include_others: bool = False) -> dict:
     if sub.empty:
         zero = [0 for _ in aspects]
         zero_f = [0.0 for _ in aspects]
+        labels = aspects.copy()
+        if include_others:
+            labels.append("others")
+            zero.append(0)
+            zero_f.append(0.0)
         return {
-            "labels": aspects,
-            "counts": {
-                "positive": zero, "neutral": zero, "negative": zero,
-            },
-            "percent": {
-                "positive": zero_f, "neutral": zero_f, "negative": zero_f,
-            },
+            "labels": labels,
+            "counts": {"positive": zero, "neutral": zero, "negative": zero},
+            "percent": {"positive": zero_f, "neutral": zero_f, "negative": zero_f},
         }
 
-    # counts by aspect × sentiment
     g = (
         sub.groupby(["aspect_dominant", "sentiment_label"])
           .size().reset_index(name="count")
@@ -73,31 +93,70 @@ def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str]) -> dict:
         g.pivot(index="aspect_dominant", columns="sentiment_label", values="count")
          .fillna(0)
     )
-    # Ensure all sentiment columns exist
     for col in ["positive", "neutral", "negative"]:
         if col not in pivot.columns:
             pivot[col] = 0
 
-    # Reindex to our aspect order; fill missing with 0
-    pivot = pivot.reindex(aspects, fill_value=0)
+    # Handle predefined aspects
+    predefined_pivot = pivot.reindex(aspects, fill_value=0)
+    
+    labels = aspects.copy()
+    counts = {
+        "positive": [int(x) for x in predefined_pivot["positive"].tolist()],
+        "neutral":  [int(x) for x in predefined_pivot["neutral"].tolist()],
+        "negative": [int(x) for x in predefined_pivot["negative"].tolist()],
+    }
+    percent = {
+        "positive": [float(x) for x in predefined_pivot["positive"].tolist()],
+        "neutral":  [float(x) for x in predefined_pivot["neutral"].tolist()],
+        "negative": [float(x) for x in predefined_pivot["negative"].tolist()],
+    }
 
-    # Per-aspect totals (row-wise)
-    totals = pivot.sum(axis=1).replace(0, 1)  # avoid divide-by-zero
-    pct = (pivot.div(totals, axis=0) * 100).round(2)
+    # Add "Others" category if requested
+    if include_others:
+        # Find aspects not in predefined list
+        all_aspects = sub["aspect_dominant"].unique()
+        other_aspects = [a for a in all_aspects if a not in aspects]
+        
+        if len(other_aspects) > 0:
+            others_data = sub[sub["aspect_dominant"].isin(other_aspects)]
+            others_counts = others_data.groupby("sentiment_label").size()
+            
+            labels.append("others")
+            counts["positive"].append(int(others_counts.get("positive", 0)))
+            counts["neutral"].append(int(others_counts.get("neutral", 0)))
+            counts["negative"].append(int(others_counts.get("negative", 0)))
+            
+            # Calculate percentages for others
+            others_total = others_counts.sum()
+            if others_total > 0:
+                percent["positive"].append(float((others_counts.get("positive", 0) / others_total * 100).round(2)))
+                percent["neutral"].append(float((others_counts.get("neutral", 0) / others_total * 100).round(2)))
+                percent["negative"].append(float((others_counts.get("negative", 0) / others_total * 100).round(2)))
+            else:
+                percent["positive"].append(0.0)
+                percent["neutral"].append(0.0)
+                percent["negative"].append(0.0)
+        else:
+            labels.append("others")
+            counts["positive"].append(0)
+            counts["neutral"].append(0)
+            counts["negative"].append(0)
+            percent["positive"].append(0.0)
+            percent["neutral"].append(0.0)
+            percent["negative"].append(0.0)
 
     return {
-        "labels": aspects,
-        "counts": {
-            "positive": [int(x) for x in pivot["positive"].tolist()],
-            "neutral":  [int(x) for x in pivot["neutral"].tolist()],
-            "negative": [int(x) for x in pivot["negative"].tolist()],
-        },
-        "percent": {
-            "positive": [float(x) for x in pct["positive"].tolist()],
-            "neutral":  [float(x) for x in pct["neutral"].tolist()],
-            "negative": [float(x) for x in pct["negative"].tolist()],
-        },
+        "labels": labels,
+        "counts": counts,
+        "percent": percent,
     }
+
+def _pick_any_date_col(df: pd.DataFrame) -> Optional[str]:
+    for c in ["createdat", "created_dt", "created_at", "tweet_date", "date", "dt"]:
+        if c in df.columns:
+            return c
+    return None
 
 # ------------ Load Sentiment (Stage 1) ------------
 if not os.path.exists(SENTI_PATH):
@@ -119,7 +178,6 @@ if os.path.exists(ASPECT_PATH):
     ASPECT_MIN_DATE = adf["date_only"].min()
     ASPECT_MAX_DATE = adf["date_only"].max()
 else:
-    # API still runs; aspect endpoints return zeros.
     adf = pd.DataFrame(columns=["date_only", "aspect_dominant", "sentiment_label"])
     ASPECT_MIN_DATE = SENT_MIN_DATE
     ASPECT_MAX_DATE = SENT_MAX_DATE
@@ -129,11 +187,13 @@ stage3_df = None
 if os.path.exists(STAGE3_PATH):
     try:
         stage3_df = pd.read_parquet(STAGE3_PATH)
-        # Expect columns: aspect_dominant, positive, neutral, negative, total, *_pct (no dates)
         for c in ["aspect_dominant", "positive", "neutral", "negative"]:
             assert c in stage3_df.columns
     except Exception:
         stage3_df = None
+
+# ---------- Simple in-process cache for /themes ----------
+_THEMES_CACHE: dict[Tuple[Optional[str], Optional[str], int, str], dict] = {}
 
 # ------------ Routes ------------
 @app.get("/")
@@ -144,6 +204,8 @@ def health():
         "aspect_date_range": {"min": str(ASPECT_MIN_DATE), "max": str(ASPECT_MAX_DATE)},
         "has_aspects": bool(len(adf) > 0),
         "has_stage3_cache": bool(stage3_df is not None),
+        "env_loaded": os.path.exists(ROOT_DOTENV),
+        "has_openai_key": bool(_read_openai_key()),
     }
 
 # --- Sentiment ---
@@ -268,18 +330,9 @@ def aspects_sentiment_split(
     start: date = Query(default=None),
     end:   date = Query(default=None),
     as_percent: bool = Query(default=False),
+    include_others: bool = Query(default=False),
 ):
-    """
-    Returns stacked-bar data by aspect:
-      - labels: aspect names
-      - counts: {positive: [], neutral: [], negative: []}
-      - percent: same but in %
-    If no start/end provided and stage-3 cache exists (no dates), uses it.
-    Otherwise computes from Stage-2 (with filter).
-    """
-    # Fast path: cache without dates (whole period)
     if start is None and end is None and stage3_df is not None:
-        # ensure order and presence
         s3 = stage3_df.set_index("aspect_dominant").reindex(ASPECTS, fill_value=0)
         for c in ["positive", "neutral", "negative"]:
             if c not in s3.columns:
@@ -287,27 +340,239 @@ def aspects_sentiment_split(
         totals = s3[["positive", "neutral", "negative"]].sum(axis=1).replace(0, 1)
         pct = (s3[["positive", "neutral", "negative"]].div(totals, axis=0) * 100).round(2)
 
-        payload = {
-            "labels": ASPECTS,
-            "counts": {
+        labels = ASPECTS.copy()
+        counts = {
                 "positive": [int(x) for x in s3["positive"].tolist()],
                 "neutral":  [int(x) for x in s3["neutral"].tolist()],
                 "negative": [int(x) for x in s3["negative"].tolist()],
-            },
-            "percent": {
+        }
+        percent = {
                 "positive": [float(x) for x in pct["positive"].tolist()],
                 "neutral":  [float(x) for x in pct["neutral"].tolist()],
                 "negative": [float(x) for x in pct["negative"].tolist()],
-            },
         }
-        return payload if as_percent is False else payload  # UI will choose which series to plot
 
-    # Compute from Stage-2 with date filtering
+        # Add "Others" category if requested
+        if include_others:
+            # Calculate others by finding aspects not in predefined list
+            all_aspects = stage3_df["aspect_dominant"].unique()
+            other_aspects = [a for a in all_aspects if a not in ASPECTS]
+            
+            if len(other_aspects) > 0:
+                others_data = stage3_df[stage3_df["aspect_dominant"].isin(other_aspects)]
+                others_counts = others_data[["positive", "neutral", "negative"]].sum()
+                
+                labels.append("others")
+                counts["positive"].append(int(others_counts["positive"]))
+                counts["neutral"].append(int(others_counts["neutral"]))
+                counts["negative"].append(int(others_counts["negative"]))
+                
+                # Calculate percentages for others
+                others_total = others_counts.sum()
+                if others_total > 0:
+                    percent["positive"].append(float((others_counts["positive"] / others_total * 100).round(2)))
+                    percent["neutral"].append(float((others_counts["neutral"] / others_total * 100).round(2)))
+                    percent["negative"].append(float((others_counts["negative"] / others_total * 100).round(2)))
+                else:
+                    percent["positive"].append(0.0)
+                    percent["neutral"].append(0.0)
+                    percent["negative"].append(0.0)
+
+        payload = {
+            "labels": labels,
+            "counts": counts,
+            "percent": percent,
+        }
+        return payload
+
     s = start or ASPECT_MIN_DATE
     e = end or ASPECT_MAX_DATE
     if adf.empty:
-        return _aspect_split_from_subset(pd.DataFrame(), ASPECTS)
+        return _aspect_split_from_subset(pd.DataFrame(), ASPECTS, include_others)
 
     mask = (adf["date_only"] >= s) & (adf["date_only"] <= e)
     sub = adf.loc[mask, ["aspect_dominant", "sentiment_label"]]
-    return _aspect_split_from_subset(sub, ASPECTS)
+    return _aspect_split_from_subset(sub, ASPECTS, include_others)
+
+# --- Executive summary over a date window (LLM-powered with fallback) ---
+@app.get("/executive-summary")
+def executive_summary(
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end:   str = Query(..., description="YYYY-MM-DD"),
+    sample_per_sentiment: int = Query(default=250, ge=50, le=500),
+):
+    """
+    Summarizes all tweets in the selected duration.
+    Uses OpenAI if OPENAI_API_KEY is configured, otherwise a rule-based fallback.
+    Returns: {start, end, used_llm, summary, stats:{sentiment, top_aspects, keywords}}
+    """
+    try:
+        result = build_executive_summary(
+            df_senti=df,            # Stage 1 DF (has date_only, sentiment_label, text cols)
+            df_aspects=adf,         # Stage 2 DF (for top aspects)
+            start=start,
+            end=end,
+            openai_api_key=_read_openai_key(),
+            sample_per_sentiment=sample_per_sentiment,
+        )
+        return result
+    except Exception as e:
+        tb = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "trace_tail": tb.splitlines()[-6:]},
+        )
+
+# --- Structured brief (bullets/themes/risks/opps) ---
+@app.get("/structured-brief")
+def structured_brief(
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end:   str = Query(..., description="YYYY-MM-DD"),
+    keyword: Optional[str] = Query(default=None),
+    sample_size: int = Query(default=50, ge=20, le=200),
+):
+    try:
+        # Work on a copy and ensure we expose exactly ONE 'date' column
+        df_for_llm = df.copy()
+
+        if "date" in df_for_llm.columns:
+            pass  # already present
+        elif "date_only" in df_for_llm.columns:
+            df_for_llm["date"] = df_for_llm["date_only"]
+        elif "created_at" in df_for_llm.columns:
+            df_for_llm["date"] = df_for_llm["created_at"]
+        elif "timestamp" in df_for_llm.columns:
+            df_for_llm["date"] = df_for_llm["timestamp"]
+        else:
+            maybe = [c for c in df_for_llm.columns if "date" in c or "time" in c]
+            if maybe:
+                df_for_llm["date"] = df_for_llm[maybe[0]]
+            else:
+                df_for_llm["date"] = pd.NaT
+
+        # If multiple 'date' columns somehow exist, keep the first and drop the rest
+        if (df_for_llm.columns == "date").sum() > 1:
+            first_idx = [i for i, c in enumerate(df_for_llm.columns) if c == "date"][0]
+            keep = list(range(len(df_for_llm.columns)))
+            for i, c in enumerate(df_for_llm.columns):
+                if c == "date" and i != first_idx:
+                    keep.remove(i)
+            df_for_llm = df_for_llm.iloc[:, keep]
+
+        res = summarize_tweets(
+            df=df_for_llm,
+            start_date=start,
+            end_date=end,
+            keyword=keyword,
+            sample_size=sample_size,
+        )
+        return res
+    except Exception as e:
+        tb = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "trace_tail": tb.splitlines()[-6:]},
+        )
+
+# --- Themes (dynamic clustering + summaries) ---
+@app.get("/themes")
+def themes(
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    end:   Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    n_clusters: int      = Query(default=6, ge=2, le=6),  # Limited to 6 themes max
+    emb_model: str       = Query(default="sentence-transformers/all-MiniLM-L6-v2"),
+    merge_similar: bool  = Query(default=True, description="Automatically merge similar themes"),
+):
+    """
+    Returns:
+      { updated_at, used_llm, themes: [{id,name,summary,tweet_count,positive,negative,neutral}] }
+    """
+    key = (start, end, int(n_clusters), emb_model)
+    if key in _THEMES_CACHE:
+        return _THEMES_CACHE[key]
+
+    try:
+        payload = compute_themes_payload(
+            parquet_stage2=ASPECT_PATH,
+            n_clusters=n_clusters,
+            emb_model=emb_model,
+            start_date=start,
+            end_date=end,
+            openai_api_key=_read_openai_key(),
+            merge_similar=merge_similar,
+        )
+        _THEMES_CACHE[key] = payload
+        return payload
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("[/themes ERROR]", e, "\n", tb)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "hint": "Check OpenAI key, sklearn/torch availability, date range, and data paths.",
+                "trace_tail": tb.splitlines()[-6:],
+            },
+        )
+
+# --- Tweets drill-down for a theme (reads STAGE3_THEMES_PARQUET) ---
+@app.get("/themes/{theme_id}/tweets")
+def theme_tweets(
+    theme_id: int,
+    limit: int = Query(default=10, ge=1, le=200),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    end:   Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+):
+    if not os.path.exists(STAGE3_THEMES_PARQUET):
+        return {"items": [], "note": "Stage-3 parquet not found. Call /themes first to generate."}
+
+    df3 = pd.read_parquet(STAGE3_THEMES_PARQUET)
+    if "theme" not in df3.columns:
+        return {"items": [], "note": "'theme' column not present in stage-3 parquet."}
+
+    date_col = _pick_any_date_col(df3)
+    if date_col:
+        df3[date_col] = pd.to_datetime(df3[date_col], errors="coerce")
+        if start:
+            df3 = df3[df3[date_col] >= pd.to_datetime(start)]
+        if end:
+            df3 = df3[df3[date_col] <= pd.to_datetime(end)]
+
+    sub = df3[df3["theme"] == int(theme_id)].copy()
+    if sub.empty:
+        return {"items": []}
+
+    if date_col:
+        sub = sub.sort_values(date_col, ascending=False)
+
+    cols_keep = [c for c in [
+        date_col, "sentiment_label", "sentiment_score",
+        "aspect_dominant", "twitter_url", "tweet_url",
+        "text_used", "clean_tweet", "text", "fulltext"
+    ] if c and c in sub.columns]
+
+    def _pick_text(row: dict) -> str:
+        for c in ["text_used", "clean_tweet", "text", "fulltext"]:
+            if c in row and c in row and row[c]:
+                return str(row[c])
+        return ""
+
+    items = []
+    for _, r in sub[cols_keep].head(int(limit)).iterrows():
+        d = r.to_dict()
+        created = str(d.get(date_col)) if date_col else ""
+        url_val = d.get("twitter_url") or d.get("tweet_url") or ""
+        items.append({
+            "date": created,                 # new
+            "createdat": created,            # legacy-friendly
+            "sentiment_label": d.get("sentiment_label"),
+            "sentiment_score": d.get("sentiment_score"),
+            "aspect_dominant": d.get("aspect_dominant"),
+            "url": url_val,                  # new
+            "twitterurl": url_val,           # legacy-friendly
+            "text": _pick_text(d),           # new
+            "text_clean": _pick_text(d),     # legacy-friendly
+        })
+
+    return {"items": items}
+

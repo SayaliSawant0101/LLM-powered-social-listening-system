@@ -41,3 +41,4 @@ data/*.xlsx
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
+node_modules

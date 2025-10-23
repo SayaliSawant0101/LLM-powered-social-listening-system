@@ -16,7 +16,7 @@ function iso(x) {
 }
 
 export default function Dashboard() {
-  const { start, end, meta, setStart, setEnd } = useDate();
+  const { start, end, meta, setStart, setEnd, loading: metaLoading } = useDate();
   const [summary, setSummary] = useState(null);
   const [trend, setTrend] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -29,6 +29,8 @@ export default function Dashboard() {
   const [loadingAspectSplit, setLoadingAspectSplit] = useState(false);
   const [selectedDateModal, setSelectedDateModal] = useState({ isOpen: false, date: null, data: null });
   const [loadingDateAspects, setLoadingDateAspects] = useState(false);
+  const [tooltipData, setTooltipData] = useState(null);
+  const [tweetCountsCache, setTweetCountsCache] = useState({});
 
   // ---- load sentiment summary + trend ----
   useEffect(() => {
@@ -46,9 +48,25 @@ export default function Dashboard() {
         setSummary(s);
         setTrend(t?.trend || []);
         setHasMoreData((t?.trend || []).length === 50);
+        
+        // Pre-fetch tweet counts for all dates to cache them
+        if (t?.trend && t.trend.length > 0) {
+          const countsCache = {};
+          const promises = t.trend.map(async (trendItem) => {
+            const counts = await getTweetCountsForDate(trendItem.date);
+            if (counts) {
+              countsCache[trendItem.date] = counts;
+            }
+          });
+          
+          Promise.all(promises).then(() => {
+            setTweetCountsCache(countsCache);
+          });
+        }
       } catch (error) {
         console.error('Failed to load data:', error);
-        setErr("Failed to load data. Is the API running on :8000?");
+        console.error('Error details:', error.response?.data || error.message);
+        setErr(`Failed to load data. Error: ${error.message}`);
       } finally {
         setLoading(false);
       }
@@ -79,35 +97,40 @@ export default function Dashboard() {
     }
   };
 
-  // ---- load aspect split for selected date ----
-  const loadDateAspects = async (selectedDate) => {
+  // Function to get actual tweet counts for a specific date
+  const getTweetCountsForDate = async (date) => {
     try {
-      setLoadingDateAspects(true);
-      
-      // Find the actual date value from trend data based on the formatted label
-      const actualDate = trend.find(item => {
-        const formattedDate = formatDate(item.date);
-        return formattedDate === selectedDate;
-      })?.date;
-      
-      if (!actualDate) {
-        console.error('Could not find actual date for:', selectedDate);
-        setErr("Could not find data for selected date");
-        return;
-      }
-      
-      // Use a small date range around the selected date to ensure we get data
-      const dateObj = new Date(actualDate);
+      const dateObj = new Date(date);
       const nextDay = new Date(dateObj);
       nextDay.setDate(dateObj.getDate() + 1);
       
-      const startDate = actualDate;
+      const startDate = date;
       const endDate = nextDay.toISOString().split('T')[0];
       
-      // Get aspect sentiment split for the date range
-      const data = await getAspectSentimentSplit(startDate, endDate, true, true);
+      const data = await getAspectSentimentSplit(startDate, endDate, false, true); // false = get counts, not percentages
       
-      // Transform the data to show three-level hierarchy: Total -> Aspect -> Sentiment
+      if (data?.labels && data?.counts) {
+        const positiveTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.positive[idx] || 0), 0);
+        const neutralTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.neutral[idx] || 0), 0);
+        const negativeTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.negative[idx] || 0), 0);
+        const totalTweets = positiveTotal + neutralTotal + negativeTotal;
+        
+        return {
+          totalTweets,
+          positive: positiveTotal,
+          neutral: neutralTotal,
+          negative: negativeTotal
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to get tweet counts:', error);
+      return null;
+    }
+  };
+
+  // Helper function to transform aspect data
+  const transformAspectData = (data) => {
       const transformedData = {
         totalTweets: 0,
         aspectBreakdown: [],
@@ -118,19 +141,16 @@ export default function Dashboard() {
         }
       };
       
-      // Handle the API response structure: {labels: [], counts: {positive: [], negative: [], neutral: []}, percent: {positive: [], negative: [], neutral: []}}
+    
       if (data?.labels && data?.counts && data?.percent) {
-        // Calculate total tweets first
         const grandTotal = data.labels.reduce((sum, _, idx) => {
           return sum + (data.counts.positive[idx] || 0) + (data.counts.negative[idx] || 0) + (data.counts.neutral[idx] || 0);
         }, 0);
         
-        // Calculate sentiment totals
         const positiveTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.positive[idx] || 0), 0);
         const neutralTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.neutral[idx] || 0), 0);
         const negativeTotal = data.labels.reduce((sum, _, idx) => sum + (data.counts.negative[idx] || 0), 0);
         
-        // Transform data by aspect (overall level)
         transformedData.aspectBreakdown = data.labels.map((label, index) => {
           const positiveCount = data.counts.positive[index] || 0;
           const negativeCount = data.counts.negative[index] || 0;
@@ -142,9 +162,8 @@ export default function Dashboard() {
             count: totalCount,
             percentage: grandTotal > 0 ? (totalCount / grandTotal) * 100 : 0
           };
-        }).filter(item => item.count > 0); // Only show aspects with data
+      }).filter(item => item.count > 0);
         
-        // Transform data by sentiment with aspect breakdown
         transformedData.sentimentBreakdown.positive = {
           total: positiveTotal,
           aspects: data.labels.map((label, index) => ({
@@ -172,9 +191,81 @@ export default function Dashboard() {
           })).filter(item => item.count > 0)
         };
         
-        // Set total tweets
         transformedData.totalTweets = grandTotal;
+    } else {
+      console.error('Invalid data structure:', data);
+    }
+    
+    return transformedData;
+  };
+
+  // ---- load aspect split for selected date ----
+  const loadDateAspects = async (selectedDate) => {
+    try {
+      setLoadingDateAspects(true);
+      
+      // Create a mapping from chart labels to actual dates
+      const labelToDateMap = {};
+      trend.forEach(item => {
+        const formattedLabel = formatDate(item.date);
+        labelToDateMap[formattedLabel] = item.date;
+      });
+      
+      
+      const actualDate = labelToDateMap[selectedDate];
+      
+      if (!actualDate) {
+        console.error('Could not find actual date for:', selectedDate);
+        console.error('Available mappings:', labelToDateMap);
+        
+        // Try to parse the date from the label if it's in a recognizable format
+        let fallbackDate = null;
+        
+        // Handle "Aug 13" format
+        if (selectedDate.includes('Aug')) {
+          const dayMatch = selectedDate.match(/(\d+)/);
+          if (dayMatch) {
+            const day = dayMatch[1].padStart(2, '0');
+            fallbackDate = `2025-08-${day}`;
+          }
+        }
+        
+        if (fallbackDate) {
+          const startDate = fallbackDate;
+          const endDate = new Date(new Date(fallbackDate).getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          
+          // Get aspect sentiment split for the date range
+          const data = await getAspectSentimentSplit(startDate, endDate, true, true);
+          
+          // Transform the data
+          const transformedData = transformAspectData(data);
+          
+          setSelectedDateModal({
+            isOpen: true,
+            date: fallbackDate,
+            formattedDate: selectedDate,
+            data: transformedData
+          });
+          return;
+        }
+        
+        setErr("Could not find data for selected date");
+        return;
       }
+      
+      // Use a small date range around the selected date to ensure we get data
+      const dateObj = new Date(actualDate);
+      const nextDay = new Date(dateObj);
+      nextDay.setDate(dateObj.getDate() + 1);
+      
+      const startDate = actualDate;
+      const endDate = nextDay.toISOString().split('T')[0];
+      
+      // Get aspect sentiment split for the date range
+      const data = await getAspectSentimentSplit(startDate, endDate, true, true);
+      
+      // Transform the data using helper function
+      const transformedData = transformAspectData(data);
       
       setSelectedDateModal({
         isOpen: true,
@@ -197,7 +288,6 @@ export default function Dashboard() {
       setLoadingAspectSplit(true);
       const data = await getAspectSentimentSplit(start, end, true, true); // Include others
       
-      console.log('Raw API response:', data); // Debug log
       
       // Transform the API response to match our expected format
       let filteredData = [];
@@ -234,7 +324,6 @@ export default function Dashboard() {
         }
       }
       
-      console.log('Transformed data for', sentiment, ':', filteredData); // Debug log
       
       setAspectSplitModal({
         isOpen: true,
@@ -332,11 +421,14 @@ export default function Dashboard() {
         { label: "% Neutral", data: neu, borderColor: "#facc15", fill: false },
         { label: "% Negative", data: neg, borderColor: "#ef4444", fill: false },
       ],
+      // Store original data for tooltip access
+      originalData: aggregatedTrend
     };
   }, [trend, timePeriod]);
 
   const total = summary?.total || 0;
   const pct = summary?.percent || { positive: 0, negative: 0, neutral: 0 };
+  const counts = summary?.counts || { positive: 0, negative: 0, neutral: 0 };
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden">
@@ -353,29 +445,32 @@ export default function Dashboard() {
         </div>
       )}
 
-      {loading && (
+      {(loading || metaLoading) && (
           <div className="flex items-center justify-center h-full">
             <div className="flex flex-col items-center space-y-4">
               <div className="w-8 h-8 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
-              <span className="text-slate-300 font-semibold text-lg">Loading analytics...</span>
+              <span className="text-slate-300 font-semibold text-lg">
+                {metaLoading ? 'Loading metadata...' : 'Loading analytics...'}
+              </span>
           </div>
         </div>
       )}
 
-        {!loading && (
+        {!loading && !metaLoading && (
         <>
             {/* Ultra-Compact Analytics Dashboard Header */}
             <div className="mb-0.5 pt-2 pb-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <div className="w-6 h-6 bg-gradient-to-br from-emerald-400 to-cyan-400 rounded-lg flex items-center justify-center shadow-lg">
+                  <div className="w-6 h-6 bg-gradient-to-br from-emerald-400 to-cyan-400 rounded-lg flex items-center justify-center shadow-lg ml-2">
                     <svg className="w-3 h-3 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5a2 2 0 012-2h4a2 2 0 012 2v2H8V5z" />
                     </svg>
                   </div>
                   <div className="px-2 py-1">
-                    <h1 className="text-sm font-bold text-white">Analytics Dashboard</h1>
-                    <p className="text-slate-400 text-xs">Real-time sentiment analysis</p>
+                    <h1 className="text-xl font-bold text-white">Analytics Dashboard</h1>
+                    <p className="text-slate-400 text-sm">Real-time sentiment analysis</p>
                   </div>
                 </div>
                 <div className="flex items-center">
@@ -408,7 +503,7 @@ export default function Dashboard() {
             {/* Ultra-Compact Main Content Layout */}
             <div className="flex-1 grid grid-cols-1 lg:grid-cols-8 gap-0.5 min-h-0">
               {/* Left Side - Compact KPI Cards */}
-              <div className="lg:col-span-1 space-y-0.5">
+              <div className="lg:col-span-1 space-y-2">
                 {/* Total Tweets Card */}
                 <div className="bg-gradient-to-br from-slate-800/60 to-slate-700/60 backdrop-blur-sm rounded-md p-3 border border-slate-600/30 shadow-md hover:shadow-emerald-500/20 hover:border-emerald-400/40 transition-all duration-500 group cursor-pointer">
                   <div className="flex items-center justify-between mb-1">
@@ -422,17 +517,10 @@ export default function Dashboard() {
                       <p className="text-sm font-bold text-white group-hover:text-emerald-400 transition-colors duration-300">{total.toLocaleString()}</p>
                     </div>
                   </div>
-              <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-500">All time</span>
-                    <div className="flex items-center space-x-1">
-                      <div className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></div>
-                      <span className="text-xs text-emerald-400 font-medium">Live</span>
-                    </div>
-                  </div>
                 </div>
 
                 {/* Ultra-Compact Sentiment Cards */}
-                <div className="space-y-0.5">
+                <div className="space-y-2">
                   {/* Positive Sentiment Card */}
                   <div className="bg-gradient-to-br from-slate-800/60 to-slate-700/60 backdrop-blur-sm rounded-md p-3 border border-slate-600/30 shadow-md hover:shadow-green-500/20 hover:border-green-400/40 transition-all duration-500 group cursor-pointer">
                     <div className="flex items-center justify-between mb-1">
@@ -443,7 +531,7 @@ export default function Dashboard() {
                 </div>
                       <div className="text-right">
                         <p className="text-xs font-medium text-slate-400 mb-0">Positive</p>
-                        <p className="text-sm font-bold text-white group-hover:text-green-400 transition-colors duration-300">{pct.positive ?? 0}%</p>
+                        <p className="text-xs font-bold text-white group-hover:text-green-400 transition-colors duration-300">{counts.positive ?? 0} ({pct.positive ?? 0}%)</p>
               </div>
             </div>
                     <div className="w-full bg-slate-700/50 rounded-full h-0.5 mb-1">
@@ -478,7 +566,7 @@ export default function Dashboard() {
                 </div>
                       <div className="text-right">
                         <p className="text-xs font-medium text-slate-400 mb-0">Neutral</p>
-                        <p className="text-sm font-bold text-white group-hover:text-yellow-400 transition-colors duration-300">{pct.neutral ?? 0}%</p>
+                        <p className="text-xs font-bold text-white group-hover:text-yellow-400 transition-colors duration-300">{counts.neutral ?? 0} ({pct.neutral ?? 0}%)</p>
               </div>
             </div>
                     <div className="w-full bg-slate-700/50 rounded-full h-0.5 mb-1">
@@ -513,7 +601,7 @@ export default function Dashboard() {
                       </div>
                       <div className="text-right">
                         <p className="text-xs font-medium text-slate-400 mb-0">Negative</p>
-                        <p className="text-sm font-bold text-white group-hover:text-red-400 transition-colors duration-300">{pct.negative ?? 0}%</p>
+                        <p className="text-xs font-bold text-white group-hover:text-red-400 transition-colors duration-300">{counts.negative ?? 0} ({pct.negative ?? 0}%)</p>
                       </div>
                     </div>
                     <div className="w-full bg-slate-700/50 rounded-full h-0.5 mb-1">
@@ -542,7 +630,7 @@ export default function Dashboard() {
 
               {/* Middle Side - Aspect Breakdown Card */}
               {aspectSplitModal.isOpen && (
-                <div className="lg:col-span-1.5 flex flex-col min-h-0">
+                <div className="lg:col-span-2 flex flex-col min-h-0">
                   <div className="bg-gradient-to-br from-slate-800/60 to-slate-700/60 backdrop-blur-sm rounded-md p-4 border border-slate-600/30 shadow-md flex flex-col min-h-0" style={{ height: 'calc(100vh - 180px)' }}>
                     <div className="flex items-center justify-between mb-4 flex-shrink-0">
                       <div className="flex items-center space-x-2">
@@ -634,7 +722,7 @@ export default function Dashboard() {
               )}
 
               {/* Chart and Date Aspect Sidebar Container */}
-              <div className={`flex flex-row min-h-0 gap-2 ${aspectSplitModal.isOpen ? 'lg:col-span-5.5' : selectedDateModal.isOpen ? 'lg:col-span-5.5' : 'lg:col-span-7'}`}>
+              <div className={`flex flex-row min-h-0 gap-2 ${aspectSplitModal.isOpen ? 'lg:col-span-5' : selectedDateModal.isOpen ? 'lg:col-span-6' : 'lg:col-span-7'}`}>
                 {/* Chart Section */}
                 <div className={`flex flex-col min-h-0 ${selectedDateModal.isOpen ? 'flex-1' : 'w-full'}`}>
                   <div className="bg-gradient-to-br from-slate-800/60 to-slate-700/60 backdrop-blur-sm rounded-md p-1 border border-slate-600/30 shadow-md flex flex-col min-h-0" style={{ height: 'calc(100vh - 180px)' }}>
@@ -651,21 +739,6 @@ export default function Dashboard() {
                         </div>
                       </div>
                     <div className="flex items-center space-x-2">
-                      {/* Test Chart Click Button */}
-                      <button 
-                        onClick={() => {
-                          console.log('Test chart click button clicked');
-                          loadDateAspects('Aug 10');
-                        }}
-                        className="bg-blue-500 hover:bg-blue-600 text-white text-xs px-2 py-1 rounded"
-                      >
-                        Test Chart Click
-                      </button>
-                      {/* Debug Display */}
-                      <div className="text-xs text-yellow-400 bg-black/50 px-2 py-1 rounded">
-                        Sidebar: {selectedDateModal.isOpen ? 'OPEN' : 'CLOSED'}
-                      </div>
-                      {/* Time Period Selector */}
                       <div className="flex items-center space-x-1 bg-slate-700/30 backdrop-blur-sm rounded-md border border-slate-600/50 px-2 py-1">
                           <span className="text-xs text-slate-200 font-medium">View:</span>
                           <select
@@ -677,13 +750,6 @@ export default function Dashboard() {
                             <option value="weekly">Weekly</option>
                             <option value="monthly">Monthly</option>
                           </select>
-                        </div>
-                        <div className="flex items-center space-x-1 bg-slate-700/50 px-1.5 py-0.5 rounded">
-                          <div className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></div>
-                          <span className="text-xs text-slate-300 font-medium">Live</span>
-                        </div>
-                        <div className="text-xs text-slate-400 bg-slate-700/30 px-1.5 py-0.5 rounded">
-                          {trend.length} pts
                         </div>
                         {loadingMore && (
                           <div className="flex items-center space-x-1 text-xs text-emerald-400">
@@ -748,9 +814,70 @@ export default function Dashboard() {
                               bodyColor: '#cbd5e1',
                               borderColor: 'rgba(148, 163, 184, 0.2)',
                               borderWidth: 1,
-                              cornerRadius: 4,
+                              cornerRadius: 8,
                               displayColors: true,
-                              padding: 4
+                              padding: 12,
+                              callbacks: {
+                                title: function(context) {
+                                  const dataIndex = context[0].dataIndex;
+                                  const chartDate = trendLineData.labels[dataIndex];
+                                  
+                                  // Get the actual date from trend data
+                                  const originalTrendItem = trend.find(item => formatDate(item.date) === chartDate);
+                                  
+                                  if (!originalTrendItem) {
+                                    return `Date: ${chartDate}`;
+                                  }
+                                  
+                                  // Get cached tweet counts
+                                  const tweetCounts = tweetCountsCache[originalTrendItem.date];
+                                  
+                                  if (tweetCounts) {
+                                    return `Date: ${chartDate} - Total: ${tweetCounts.totalTweets} tweets`;
+                                  }
+                                  
+                                  return `Date: ${chartDate}`;
+                                },
+                                label: function(context) {
+                                  const dataIndex = context.dataIndex;
+                                  const datasetLabel = context.dataset.label;
+                                  const percentage = context.parsed.y;
+                                  
+                                  // Get the actual date from trend data
+                                  const chartDate = trendLineData.labels[dataIndex];
+                                  const originalTrendItem = trend.find(item => formatDate(item.date) === chartDate);
+                                  
+                                  if (!originalTrendItem) {
+                                    return `${datasetLabel}: ${percentage.toFixed(1)}%`;
+                                  }
+                                  
+                                  // Get cached tweet counts
+                                  const tweetCounts = tweetCountsCache[originalTrendItem.date];
+                                  
+                                  let sentimentLabel = '';
+                                  let tweetCount = 0;
+                                  
+                                  if (datasetLabel === '% Positive') {
+                                    sentimentLabel = 'Positive';
+                                    tweetCount = tweetCounts?.positive || 0;
+                                  } else if (datasetLabel === '% Neutral') {
+                                    sentimentLabel = 'Neutral';
+                                    tweetCount = tweetCounts?.neutral || 0;
+                                  } else if (datasetLabel === '% Negative') {
+                                    sentimentLabel = 'Negative';
+                                    tweetCount = tweetCounts?.negative || 0;
+                                  }
+                                  
+                                  if (tweetCounts) {
+                                    return `${sentimentLabel}: ${tweetCount} tweets (${percentage.toFixed(1)}%)`;
+                                  } else {
+                                    return `${sentimentLabel}: ${percentage.toFixed(1)}%`;
+                                  }
+                                },
+                                afterBody: function(context) {
+                                  return 'Click for detailed breakdown';
+                                }
+                              }
                     }
                   },
                   scales: {
@@ -788,10 +915,10 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Date Aspect Breakdown Sidebar - Using Same Pattern as Aspect Split */}
-                {selectedDateModal.isOpen && (
-                  <div className="lg:col-span-1.5 flex flex-col min-h-0">
-                    <div className="bg-gradient-to-br from-slate-800/60 to-slate-700/60 backdrop-blur-sm rounded-md p-4 border border-slate-600/30 shadow-md flex flex-col min-h-0" style={{ height: 'calc(100vh - 180px)' }}>
+                {/* Date Aspect Breakdown Sidebar */}
+                {selectedDateModal.isOpen ? (
+                  <div className="fixed top-0 right-0 w-80 h-screen bg-slate-800/95 backdrop-blur-sm border-l border-slate-600/50 z-50 flex flex-col shadow-2xl">
+                    <div className="flex flex-col h-full p-4">
                       <div className="flex items-center justify-between mb-4 flex-shrink-0">
                         <div className="flex items-center space-x-2">
                           <div className="w-6 h-6 bg-gradient-to-br from-emerald-500/20 to-cyan-500/20 rounded-md flex items-center justify-center">
@@ -815,20 +942,154 @@ export default function Dashboard() {
                       </div>
 
                       <div className="flex-1 bg-slate-900/30 rounded p-2 border border-slate-600/20 min-h-0 overflow-y-auto">
+                        {loadingDateAspects ? (
+                          <div className="flex items-center justify-center h-full">
+                            <div className="flex flex-col items-center space-y-3">
+                              <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                              <span className="text-slate-300 text-sm">Loading aspect data...</span>
+                            </div>
+                          </div>
+                        ) : selectedDateModal.data ? (
+                        <div className="space-y-4">
+                          {/* Total Tweets Summary */}
+                          <div className="bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 rounded-lg p-4 border border-emerald-500/30">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-lg font-bold text-white">Total Tweets</h4>
+                              <span className="text-2xl font-bold text-emerald-400">{selectedDateModal.data.totalTweets || 0}</span>
+                            </div>
+                            <p className="text-sm text-slate-300 mt-1">for {selectedDateModal.formattedDate || selectedDateModal.date}</p>
+                          </div>
+
+                          {/* Overall Aspect Breakdown */}
+                          <div className="space-y-3">
+                            <h4 className="text-sm font-semibold text-white">Overall Aspect Breakdown</h4>
+                            {selectedDateModal.data.aspectBreakdown && selectedDateModal.data.aspectBreakdown.length > 0 && (
+                              <div className="space-y-2">
+                                {selectedDateModal.data.aspectBreakdown.map((aspect, index) => (
+                                  <div key={index} className="space-y-1">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-sm text-slate-300 capitalize">{aspect.aspect}</span>
+                                      <div className="flex items-center space-x-2">
+                                        <span className="text-xs text-slate-400">{aspect.count} tweets</span>
+                                        <span className="text-sm font-semibold text-white">{aspect.percentage?.toFixed(1) || 0}%</span>
+                                      </div>
+                                    </div>
+                                    <div className="w-full bg-slate-700/50 rounded-full h-2">
+                                      <div
+                                        className="bg-gradient-to-r from-emerald-500 to-cyan-500 h-2 rounded-full transition-all duration-500"
+                                        style={{ width: `${Math.min(aspect.percentage || 0, 100)}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Sentiment Breakdown */}
+                          <div className="space-y-3">
+                            <h4 className="text-sm font-semibold text-white">Sentiment-Based Aspect Breakdown</h4>
+                            
+        {/* Positive Sentiment */}
+        <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+              <span className="text-sm font-semibold text-green-400">Positive</span>
+            </div>
+            <span className="text-sm font-bold text-white">
+              {selectedDateModal.data.sentimentBreakdown?.positive?.total || 0}
+              {selectedDateModal.data.totalTweets > 0 && (
+                <span className="text-xs text-green-300 ml-1">
+                  ({((selectedDateModal.data.sentimentBreakdown?.positive?.total || 0) / selectedDateModal.data.totalTweets * 100).toFixed(1)}%)
+                </span>
+              )}
+            </span>
+          </div>
+                              {selectedDateModal.data.sentimentBreakdown?.positive?.aspects && selectedDateModal.data.sentimentBreakdown.positive.aspects.length > 0 && (
+                                <div className="space-y-2">
+                                  {selectedDateModal.data.sentimentBreakdown.positive.aspects.map((aspect, index) => (
+                                    <div key={index} className="flex items-center justify-between text-xs">
+                                      <span className="text-slate-300 capitalize">{aspect.aspect}</span>
+                                      <span className="text-green-300">{aspect.count} ({aspect.percentage?.toFixed(1)}%)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+        {/* Neutral Sentiment */}
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+              <span className="text-sm font-semibold text-yellow-400">Neutral</span>
+            </div>
+            <span className="text-sm font-bold text-white">
+              {selectedDateModal.data.sentimentBreakdown?.neutral?.total || 0}
+              {selectedDateModal.data.totalTweets > 0 && (
+                <span className="text-xs text-yellow-300 ml-1">
+                  ({((selectedDateModal.data.sentimentBreakdown?.neutral?.total || 0) / selectedDateModal.data.totalTweets * 100).toFixed(1)}%)
+                </span>
+              )}
+            </span>
+          </div>
+                              {selectedDateModal.data.sentimentBreakdown?.neutral?.aspects && selectedDateModal.data.sentimentBreakdown.neutral.aspects.length > 0 && (
+                                <div className="space-y-2">
+                                  {selectedDateModal.data.sentimentBreakdown.neutral.aspects.map((aspect, index) => (
+                                    <div key={index} className="flex items-center justify-between text-xs">
+                                      <span className="text-slate-300 capitalize">{aspect.aspect}</span>
+                                      <span className="text-yellow-300">{aspect.count} ({aspect.percentage?.toFixed(1)}%)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+        {/* Negative Sentiment */}
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+              <span className="text-sm font-semibold text-red-400">Negative</span>
+            </div>
+            <span className="text-sm font-bold text-white">
+              {selectedDateModal.data.sentimentBreakdown?.negative?.total || 0}
+              {selectedDateModal.data.totalTweets > 0 && (
+                <span className="text-xs text-red-300 ml-1">
+                  ({((selectedDateModal.data.sentimentBreakdown?.negative?.total || 0) / selectedDateModal.data.totalTweets * 100).toFixed(1)}%)
+                </span>
+              )}
+            </span>
+          </div>
+                              {selectedDateModal.data.sentimentBreakdown?.negative?.aspects && selectedDateModal.data.sentimentBreakdown.negative.aspects.length > 0 && (
+                                <div className="space-y-2">
+                                  {selectedDateModal.data.sentimentBreakdown.negative.aspects.map((aspect, index) => (
+                                    <div key={index} className="flex items-center justify-between text-xs">
+                                      <span className="text-slate-300 capitalize">{aspect.aspect}</span>
+                                      <span className="text-red-300">{aspect.count} ({aspect.percentage?.toFixed(1)}%)</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        ) : (
                         <div className="text-center py-8">
-                          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="w-12 h-12 bg-slate-700/50 rounded-full flex items-center justify-center mx-auto mb-3">
+                              <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                             </svg>
                           </div>
-                          <h4 className="text-red-400 font-bold text-lg mb-2">SIDEBAR IS WORKING!</h4>
-                          <p className="text-slate-300 text-sm mb-4">This sidebar is now functional</p>
-                          <p className="text-slate-400 text-xs">Selected Date: {selectedDateModal.formattedDate || selectedDateModal.date}</p>
+                            <h4 className="text-sm font-semibold text-white mb-2">No Data Available</h4>
+                            <p className="text-slate-400 text-xs">No aspect data found for the selected date.</p>
                         </div>
+                        )}
                       </div>
                     </div>
                   </div>
-                )}
+                ) : null}
             </div>
           </div>
         </>

@@ -12,18 +12,39 @@ export function DateProvider({ children }) {
 
   // Load meta once on app start
   useEffect(() => {
-    (async () => {
+    const loadMeta = async () => {
       try {
+        console.log('Loading metadata from API...');
         const mr = await getMeta();
+        console.log('Metadata loaded:', mr);
         setMeta(mr);
         setStart(mr?.min || "");
         setEnd(mr?.max || "");
+        console.log('Date range set:', mr?.min, 'to', mr?.max);
       } catch (error) {
         console.error("Failed to load metadata:", error);
+        console.error("Error details:", error.response?.data || error.message);
+        // Set fallback data if API fails
+        setMeta({ min: "2025-08-04", max: "2025-08-30" });
+        setStart("2025-08-04");
+        setEnd("2025-08-30");
       } finally {
         setLoading(false);
       }
-    })();
+    };
+
+    // Add timeout to prevent hanging
+    const timeoutId = setTimeout(() => {
+      console.log('Metadata loading timeout - using fallback');
+      setMeta({ min: "2025-08-04", max: "2025-08-30" });
+      setStart("2025-08-04");
+      setEnd("2025-08-30");
+      setLoading(false);
+    }, 5000);
+
+    loadMeta();
+
+    return () => clearTimeout(timeoutId);
   }, []);
 
   const value = {

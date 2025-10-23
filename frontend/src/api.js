@@ -2,7 +2,7 @@
 import axios from "axios";
 
 // Prefer env if provided; otherwise fall back to localhost
-const BASE_URL = import.meta?.env?.VITE_API_BASE || "http://127.0.0.1:8000";
+const BASE_URL = import.meta?.env?.VITE_API_BASE || "http://localhost:8000";
 
 // If you set up a Vite proxy, change baseURL to "/api"
 const API = axios.create({
@@ -13,7 +13,7 @@ const API = axios.create({
 // Special API instance for long-running operations like theme generation
 const LONG_API = axios.create({
   baseURL: BASE_URL,
-  timeout: 180000, // 3 minutes for theme generation (optimized)
+  timeout: 300000, // 5 minutes for theme generation
 });
 
 // --- Sentiment ---
@@ -62,6 +62,14 @@ export async function getRawAspectData(start, end) {
     params: { start, end, as_percent: false }
   });
   return data;
+}
+
+// Get sample tweets for specific aspect and sentiment
+export async function getSampleTweets(start, end, aspect, sentiment, limit = 10) {
+  const { data } = await API.get("/tweets/sample", {
+    params: { start, end, aspect, sentiment, limit }
+  });
+  return data.tweets || [];
 }
 
 // --- Themes (dynamic clustering + summaries) ---

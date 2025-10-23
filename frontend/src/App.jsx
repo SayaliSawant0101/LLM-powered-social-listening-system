@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import AspectAnalysis from "./pages/AspectAnalysis";
 import ThemeAnalysis from "./pages/ThemeAnalysis";
 import AIInsights from "./pages/AIInsights";
+import RawData from "./pages/RawData";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
                     <Route path="/aspect-analysis" element={<AspectAnalysis />} />
                     <Route path="/theme-analysis" element={<ThemeAnalysis />} />
                     <Route path="/ai-insights" element={<AIInsights />} />
+                    <Route path="/raw-data" element={<RawData />} />
                   </Routes>
                 </main>
         </div>

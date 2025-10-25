@@ -1,44 +1,25 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-.env
-.env.*
-
-# Data & artifacts
-data/*.parquet
-data/**/*.parquet
-*.csv
-*.xlsx
-*.ipynb_checkpoints/
-
-# Node / Frontend
-frontend/node_modules/
-frontend/.vite/
-frontend/dist/
-
-# Mac / IDE
 .DS_Store
+*.log
 .vscode/
 .idea/
-
-# Logs
-*.log
-# Python
 __pycache__/
 *.pyc
 .venv/
-
-# Env & secrets
 .env
 .env.*
-
-# Data artifacts
-data/*.parquet
-data/*.csv
-data/*.xlsx
-
-# Node / frontend
-frontend/node_modules/
-frontend/dist/
-node_modules
+node_modules/
+dist/
+.build/
+.next/
+.out/
+data/
+*.parquet
+*.csv
+*.feather
+*.arrow
+*.pkl
+*.pt
+*.bin
+*.onnx
+*.h5
+faiss.index

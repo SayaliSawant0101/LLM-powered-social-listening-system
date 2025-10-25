@@ -1,3 +1,6 @@
+# LLM-powered Social Listening System
+
+> **📋 [View Project Timeline & Milestones on Notion](https://www.notion.so/LLM-powered-Social-Listening-System-28abe5c2ca3180e7a35defa1c99e44e8)**
 
 # Walmart Social Media Listener
 

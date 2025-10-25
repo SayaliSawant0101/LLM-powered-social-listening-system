@@ -5,12 +5,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from datetime import date
 from typing import Optional, Tuple
 import pandas as pd
 import traceback
 import os
+from io import StringIO, BytesIO
 
 # LLM summaries (exec summary + structured brief)
 from src.llm.summary import build_executive_summary, summarize_tweets
@@ -27,6 +28,9 @@ def _read_openai_key() -> str:
 # requires src/features/themes.py with compute_themes_payload()
 from src.features.themes import compute_themes_payload
 
+# Load raw tweets data for theme generation
+RAW_TWEETS_PATH = "data/tweets_stage0_raw.parquet"
+
 # ------------ Paths ------------
 SENTI_PATH   = "data/tweets_stage1_sentiment.parquet"
 ASPECT_PATH  = "data/tweets_stage2_aspects.parquet"
@@ -40,7 +44,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:5174",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -479,7 +485,7 @@ def structured_brief(
 def themes(
     start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
     end:   Optional[str] = Query(default=None, description="YYYY-MM-DD"),
-    n_clusters: int      = Query(default=6, ge=2, le=6),  # Limited to 6 themes max
+    n_clusters: Optional[int] = Query(default=None, ge=1, le=8),  # Auto-detect if None
     emb_model: str       = Query(default="sentence-transformers/all-MiniLM-L6-v2"),
     merge_similar: bool  = Query(default=True, description="Automatically merge similar themes"),
 ):
@@ -487,19 +493,21 @@ def themes(
     Returns:
       { updated_at, used_llm, themes: [{id,name,summary,tweet_count,positive,negative,neutral}] }
     """
-    key = (start, end, int(n_clusters), emb_model)
+    key = (start, end, n_clusters, emb_model)
+    # Clear cache to force regeneration with improved logic
     if key in _THEMES_CACHE:
-        return _THEMES_CACHE[key]
+        del _THEMES_CACHE[key]
 
     try:
+        # Load raw tweets data for theme generation
+        df = pd.read_parquet(RAW_TWEETS_PATH)
+        
         payload = compute_themes_payload(
-            parquet_stage2=ASPECT_PATH,
-            n_clusters=n_clusters,
-            emb_model=emb_model,
+            df=df,
             start_date=start,
             end_date=end,
+            n_clusters=n_clusters,
             openai_api_key=_read_openai_key(),
-            merge_similar=merge_similar,
         )
         _THEMES_CACHE[key] = payload
         return payload
@@ -575,4 +583,479 @@ def theme_tweets(
         })
 
     return {"items": items}
+
+# --- Sample tweets for specific aspect and sentiment ---
+@app.get("/tweets/sample")
+def sample_tweets(
+    start: date = Query(default=None),
+    end: date = Query(default=None),
+    aspect: str = Query(..., description="Aspect name (e.g., pricing, delivery)"),
+    sentiment: str = Query(..., description="Sentiment (positive, neutral, negative)"),
+    limit: int = Query(default=10, ge=1, le=1000),
+):
+    """
+    Returns sample tweets for a specific aspect and sentiment combination.
+    """
+    s = start or ASPECT_MIN_DATE
+    e = end or ASPECT_MAX_DATE
+    
+    if adf.empty:
+        return {"tweets": [], "count": 0, "aspect": aspect, "sentiment": sentiment}
+    
+    # Filter by date range
+    mask = (adf["date_only"] >= s) & (adf["date_only"] <= e)
+    sub = adf.loc[mask]
+    
+    if sub.empty:
+        return {"tweets": [], "count": 0, "aspect": aspect, "sentiment": sentiment}
+    
+    # Filter by aspect and sentiment
+    aspect_mask = sub["aspect_dominant"].str.lower() == aspect.lower()
+    sentiment_mask = sub["sentiment_label"].str.lower() == sentiment.lower()
+    filtered = sub[aspect_mask & sentiment_mask]
+    
+    if filtered.empty:
+        return {"tweets": [], "count": 0, "aspect": aspect, "sentiment": sentiment}
+    
+    # Get text column (try different possible column names)
+    text_col = None
+    for col in ["text", "clean_tweet", "text_used", "fulltext", "tweet_text"]:
+        if col in filtered.columns:
+            text_col = col
+            break
+    
+    if text_col is None:
+        return {"tweets": [], "count": 0, "aspect": aspect, "sentiment": sentiment, "error": "No text column found"}
+    
+    # Sample tweets
+    sample_tweets = filtered[text_col].dropna().head(limit).tolist()
+    
+    return {
+        "tweets": sample_tweets,
+        "count": len(sample_tweets),
+        "aspect": aspect,
+        "sentiment": sentiment,
+        "total_available": len(filtered)
+    }
+
+# --- Raw Data Downloads ---
+@app.get("/tweets/raw")
+def download_raw_tweets(
+    start: date = Query(default=SENT_MIN_DATE),
+    end: date = Query(default=SENT_MAX_DATE),
+    format: str = Query(default="csv", regex="^(csv|xlsx)$")
+):
+    """Download raw tweets data in CSV or Excel format"""
+    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
+    sub = df.loc[mask]
+    
+    if sub.empty:
+        return {"error": "No data found for the specified date range"}
+    
+    # Select relevant columns
+    columns = ["date", "createdat", "text", "text_clean", "sentiment_label", "aspect_dominant", "user_id"]
+    available_columns = [col for col in columns if col in sub.columns]
+    export_data = sub[available_columns].copy()
+    
+    if format == "csv":
+        csv_buffer = StringIO()
+        export_data.to_csv(csv_buffer, index=False)
+        csv_content = csv_buffer.getvalue()
+        
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=raw_tweets_{start}_to_{end}.csv"}
+        )
+    else:  # xlsx
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            export_data.to_excel(writer, sheet_name='Raw Tweets', index=False)
+        excel_content = excel_buffer.getvalue()
+        
+        return Response(
+            content=excel_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=raw_tweets_{start}_to_{end}.xlsx"}
+        )
+
+@app.get("/reports/sentiment")
+def download_sentiment_report(
+    start: date = Query(default=SENT_MIN_DATE),
+    end: date = Query(default=SENT_MAX_DATE),
+    format: str = Query(default="pdf", regex="^(pdf|xlsx)$")
+):
+    """Download comprehensive sentiment analysis report"""
+    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
+    sub = df.loc[mask]
+    
+    if sub.empty:
+        return {"error": "No data found for the specified date range"}
+    
+    # Generate sentiment summary
+    sentiment_data = _sentiment_summary(sub)
+    
+    if format == "pdf":
+        # Create PDF content (simplified version)
+        html_content = f"""
+        <html>
+        <head><title>Sentiment Analysis Report</title></head>
+        <body>
+            <h1>Sentiment Analysis Report</h1>
+            <p>Date Range: {start} to {end}</p>
+            <h2>Summary</h2>
+            <p>Total Tweets: {sentiment_data['total']}</p>
+            <p>Positive: {sentiment_data['counts']['positive']} ({sentiment_data['percent']['positive']}%)</p>
+            <p>Neutral: {sentiment_data['counts']['neutral']} ({sentiment_data['percent']['neutral']}%)</p>
+            <p>Negative: {sentiment_data['counts']['negative']} ({sentiment_data['percent']['negative']}%)</p>
+        </body>
+        </html>
+        """
+        
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename=sentiment_report_{start}_to_{end}.html"}
+        )
+    else:  # xlsx
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            # Summary sheet
+            summary_df = pd.DataFrame([
+                {"Metric": "Total Tweets", "Count": sentiment_data['total']},
+                {"Metric": "Positive", "Count": sentiment_data['counts']['positive'], "Percentage": sentiment_data['percent']['positive']},
+                {"Metric": "Neutral", "Count": sentiment_data['counts']['neutral'], "Percentage": sentiment_data['percent']['neutral']},
+                {"Metric": "Negative", "Count": sentiment_data['counts']['negative'], "Percentage": sentiment_data['percent']['negative']}
+            ])
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Raw data sheet
+            columns = ["date", "createdat", "text", "text_clean", "sentiment_label"]
+            available_columns = [col for col in columns if col in sub.columns]
+            sub[available_columns].to_excel(writer, sheet_name='Raw Data', index=False)
+        
+        excel_content = excel_buffer.getvalue()
+        
+        return Response(
+            content=excel_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=sentiment_report_{start}_to_{end}.xlsx"}
+        )
+
+@app.get("/reports/aspects")
+def download_aspect_report(
+    start: date = Query(default=SENT_MIN_DATE),
+    end: date = Query(default=SENT_MAX_DATE),
+    format: str = Query(default="pdf", regex="^(pdf|xlsx)$")
+):
+    """Download aspect analysis report"""
+    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
+    sub = df.loc[mask]
+    
+    if sub.empty:
+        return {"error": "No data found for the specified date range"}
+    
+    # Get aspect data
+    aspects = ["pricing", "delivery", "customer_service", "product_quality", "store_experience"]
+    aspect_data = _aspect_split_from_subset(sub, aspects, include_others=True)
+    
+    if format == "pdf":
+        html_content = f"""
+        <html>
+        <head><title>Aspect Analysis Report</title></head>
+        <body>
+            <h1>Aspect Analysis Report</h1>
+            <p>Date Range: {start} to {end}</p>
+            <h2>Aspect Breakdown</h2>
+        """
+        for i, aspect in enumerate(aspect_data['labels']):
+            html_content += f"<p>{aspect}: {aspect_data['counts'][i]} tweets ({aspect_data['percentages'][i]}%)</p>"
+        
+        html_content += "</body></html>"
+        
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename=aspect_report_{start}_to_{end}.html"}
+        )
+    else:  # xlsx
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            # Aspect summary
+            aspect_df = pd.DataFrame({
+                "Aspect": aspect_data['labels'],
+                "Count": aspect_data['counts'],
+                "Percentage": aspect_data['percentages']
+            })
+            aspect_df.to_excel(writer, sheet_name='Aspect Summary', index=False)
+            
+            # Raw data with aspects
+            columns = ["date", "createdat", "text", "text_clean", "sentiment_label", "aspect_dominant"]
+            available_columns = [col for col in columns if col in sub.columns]
+            sub[available_columns].to_excel(writer, sheet_name='Raw Data', index=False)
+        
+        excel_content = excel_buffer.getvalue()
+        
+        return Response(
+            content=excel_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=aspect_report_{start}_to_{end}.xlsx"}
+        )
+
+@app.get("/reports/themes")
+def download_theme_report(
+    start: date = Query(default=SENT_MIN_DATE),
+    end: date = Query(default=SENT_MAX_DATE),
+    format: str = Query(default="pdf", regex="^(pdf|xlsx)$")
+):
+    """Download theme analysis report"""
+    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
+    sub = df.loc[mask]
+    
+    if sub.empty:
+        return {"error": "No data found for the specified date range"}
+    
+    if format == "pdf":
+        html_content = f"""
+        <html>
+        <head><title>Theme Analysis Report</title></head>
+        <body>
+            <h1>Theme Analysis Report</h1>
+            <p>Date Range: {start} to {end}</p>
+            <p>Total Tweets Analyzed: {len(sub)}</p>
+            <h2>Note</h2>
+            <p>Theme analysis requires AI processing. Please use the Theme Analysis page to generate themes first.</p>
+        </body>
+        </html>
+        """
+        
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename=theme_report_{start}_to_{end}.html"}
+        )
+
+@app.get("/reports/theme/{theme_id}")
+def download_theme_tweets_report(
+    theme_id: int,
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    limit: int = Query(default=200, ge=1, le=1000)
+):
+    """Download PDF report for specific theme tweets"""
+    try:
+        # Load theme data
+        themes_df = pd.read_parquet("data/tweets_stage3_themes.parquet")
+        
+        # Filter by theme ID
+        theme_tweets = themes_df[themes_df['theme'] == theme_id]
+        
+        if theme_tweets.empty:
+            return {"error": f"No tweets found for theme {theme_id}"}
+        
+        # Apply date filter if provided
+        if start:
+            theme_tweets = theme_tweets[theme_tweets['createdat'] >= pd.to_datetime(start)]
+        if end:
+            theme_tweets = theme_tweets[theme_tweets['createdat'] <= pd.to_datetime(end)]
+        
+        if theme_tweets.empty:
+            return {"error": f"No tweets found for theme {theme_id} in the specified date range"}
+        
+        # Calculate sentiment breakdown on ALL tweets (before limiting for display)
+        sentiment_counts = theme_tweets['sentiment_label'].value_counts()
+        total_tweets = len(theme_tweets)
+        
+        # Get theme info from themes cache
+        theme_info = None
+        for cache_file in os.listdir("data"):
+            if cache_file.startswith("themes_cache_"):
+                try:
+                    with open(f"data/{cache_file}", 'r') as f:
+                        cache_data = json.load(f)
+                        for theme in cache_data.get('themes', []):
+                            if theme.get('id') == theme_id:
+                                theme_info = theme
+                                break
+                        if theme_info:
+                            break
+                except Exception as e:
+                    print(f"Error reading cache file {cache_file}: {e}")
+                    continue
+        
+        if not theme_info:
+            # Try to get theme info from the themes parquet file
+            try:
+                themes_df = pd.read_parquet("data/tweets_stage3_themes.parquet")
+                theme_tweets_sample = themes_df[themes_df['theme'] == theme_id]
+                if not theme_tweets_sample.empty:
+                    # Get the most common aspect for this theme
+                    most_common_aspect = theme_tweets_sample['aspect_dominant'].mode().iloc[0] if not theme_tweets_sample['aspect_dominant'].mode().empty else 'unknown'
+                    theme_info = {
+                        "name": f"{most_common_aspect.replace('_', ' ').title()} Analysis",
+                        "summary": f"Analysis of tweets related to {most_common_aspect.replace('_', ' ')}",
+                        "tweet_count": total_tweets
+                    }
+                else:
+                    theme_info = {
+                        "name": f"Theme {theme_id}",
+                        "summary": "Theme analysis report",
+                        "tweet_count": total_tweets
+                    }
+            except Exception as e:
+                print(f"Error reading themes parquet: {e}")
+                theme_info = {
+                    "name": f"Theme {theme_id}",
+                    "summary": "Theme analysis report",
+                    "tweet_count": total_tweets
+                }
+        
+        # Limit results for display (after calculating stats)
+        theme_tweets_display = theme_tweets.head(limit)
+        
+        positive_count = sentiment_counts.get('positive', 0)
+        negative_count = sentiment_counts.get('negative', 0)
+        neutral_count = sentiment_counts.get('neutral', 0)
+        
+        positive_pct = round((positive_count / total_tweets) * 100, 1) if total_tweets > 0 else 0
+        negative_pct = round((negative_count / total_tweets) * 100, 1) if total_tweets > 0 else 0
+        neutral_pct = round((neutral_count / total_tweets) * 100, 1) if total_tweets > 0 else 0
+        
+        # Generate HTML report
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Theme Report: {theme_info.get('name', f'Themes {theme_id}')}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                .header {{ background: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+                .tweet {{ border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 8px; }}
+                .tweet.positive {{ border-left: 4px solid #28a745; }}
+                .tweet.negative {{ border-left: 4px solid #dc3545; }}
+                .tweet.neutral {{ border-left: 4px solid #ffc107; }}
+                .sentiment {{ font-weight: bold; padding: 4px 8px; border-radius: 4px; }}
+                .positive {{ background: #d4edda; color: #155724; }}
+                .negative {{ background: #f8d7da; color: #721c24; }}
+                .neutral {{ background: #fff3cd; color: #856404; }}
+                .date {{ color: #666; font-size: 0.9em; }}
+                .aspect {{ background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }}
+                .download-btn {{ 
+                    background: #007bff; 
+                    color: white; 
+                    padding: 10px 20px; 
+                    border: none; 
+                    border-radius: 5px; 
+                    cursor: pointer; 
+                    font-size: 14px;
+                    margin-bottom: 20px;
+                }}
+                .download-btn:hover {{ background: #0056b3; }}
+                .sentiment-breakdown {{
+                    background: #f8f9fa;
+                    padding: 15px;
+                    border-radius: 8px;
+                    margin-bottom: 20px;
+                    border-left: 4px solid #007bff;
+                }}
+                .sentiment-stats {{
+                    display: flex;
+                    justify-content: space-around;
+                    margin-top: 10px;
+                }}
+                .sentiment-stat {{
+                    text-align: center;
+                    padding: 10px;
+                    border-radius: 5px;
+                }}
+                .sentiment-stat.positive {{ background: #d4edda; }}
+                .sentiment-stat.negative {{ background: #f8d7da; }}
+                .sentiment-stat.neutral {{ background: #fff3cd; }}
+                @media print {{
+                    .download-btn {{ display: none; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <button class="download-btn" onclick="window.print()">📄 Print/Download PDF</button>
+            
+            <div class="header">
+                <h1>Theme Report: {theme_info.get('name', f'Themes {theme_id}')}</h1>
+                <p><strong>Summary:</strong> {theme_info.get('summary', 'No summary available')}</p>
+                <p><strong>Total Tweets:</strong> {total_tweets}</p>
+                <p><strong>Date Range:</strong> {start or 'All time'} to {end or 'All time'}</p>
+                <p><strong>Generated:</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </div>
+            
+            <div class="sentiment-breakdown">
+                <h3>Sentiment Analysis</h3>
+                <div class="sentiment-stats">
+                    <div class="sentiment-stat positive">
+                        <strong>Positive</strong><br>
+                        {positive_count} tweets<br>
+                        <strong>{positive_pct}%</strong>
+                    </div>
+                    <div class="sentiment-stat negative">
+                        <strong>Negative</strong><br>
+                        {negative_count} tweets<br>
+                        <strong>{negative_pct}%</strong>
+                    </div>
+                    <div class="sentiment-stat neutral">
+                        <strong>Neutral</strong><br>
+                        {neutral_count} tweets<br>
+                        <strong>{neutral_pct}%</strong>
+                    </div>
+                </div>
+            </div>
+            
+            <h2>Tweets Analysis</h2>
+            <p><em>Showing first {min(limit, len(theme_tweets_display))} tweets out of {total_tweets} total tweets</em></p>
+        """
+        
+        # Add tweets (using limited display dataset)
+        for idx, tweet in theme_tweets_display.iterrows():
+            sentiment = tweet.get('sentiment_label', 'neutral')
+            aspect = tweet.get('aspect_dominant', 'unknown')
+            tweet_text = tweet.get('text', tweet.get('text_clean', tweet.get('clean_tweet', 'No text available')))
+            tweet_date = tweet.get('createdat', tweet.get('date', 'Unknown date'))
+            
+            html_content += f"""
+            <div class="tweet {sentiment}">
+                <div style="margin-bottom: 10px;">
+                    <span class="sentiment {sentiment}">{sentiment.title()}</span>
+                    <span class="aspect">{aspect}</span>
+                    <span class="date">{tweet_date}</span>
+                </div>
+                <p>{tweet_text}</p>
+            </div>
+            """
+        
+        html_content += """
+            </body>
+        </html>
+        """
+        
+        return Response(
+            content=html_content,
+            media_type="text/html",
+            headers={"Content-Disposition": f"attachment; filename=theme_{theme_id}_report_{start or 'all'}_to_{end or 'all'}.html"}
+        )
+        
+    except Exception as e:
+        return {"error": f"Failed to generate report: {str(e)}"}
+    else:  # xlsx
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            # Basic data without themes
+            columns = ["date", "createdat", "text", "text_clean", "sentiment_label", "aspect_dominant"]
+            available_columns = [col for col in columns if col in sub.columns]
+            sub[available_columns].to_excel(writer, sheet_name='Raw Data', index=False)
+        
+        excel_content = excel_buffer.getvalue()
+        
+        return Response(
+            content=excel_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=theme_report_{start}_to_{end}.xlsx"}
+        )
 

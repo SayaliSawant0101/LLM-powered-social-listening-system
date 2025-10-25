@@ -1,4 +1,4 @@
-# src/features/themes.py (drop-in for the whole compute_themes_payload function)
+# src/features/themes.py 
 from __future__ import annotations
 import os, json, re, traceback
 from typing import Dict, List, Optional
@@ -78,7 +78,7 @@ def _merge_similar_themes(themes: List[dict], similarity_threshold: float = 0.7)
             ("concern", "issue"), ("problem", "issue"), ("complaint", "issue"),
             ("experience", "interaction"), ("humor", "funny"), ("joke", "humor"),
             ("availability", "concern"), ("stock", "concern"), ("product", "availability"),
-            ("delivery", "fulfillment"), ("pricing", "tariff"), ("radioactive", "shrimp")
+            ("delivery", "fulfillment"), ("pricing", "tariff")
         ]
         
         for word1, word2 in semantic_pairs:
@@ -152,7 +152,65 @@ def _merge_similar_themes(themes: List[dict], similarity_threshold: float = 0.7)
     # Sort by tweet count again after merging
     return sorted(merged_themes, key=lambda x: x["tweet_count"], reverse=True)
 
+# =========================
+# A) Diversity-aware selection (MMR)
+# =========================
+def _mmr_select(themes_all: List[dict], texts_by_cluster: Dict[int, List[str]], n: int, lam: float = 0.65) -> List[dict]:
+    """
+    Maximal Marginal Relevance selection of N themes.
+    lam balances size/coverage vs diversity: lam in [0..1]. Higher -> favors size more.
+    """
+    # Build a TF-IDF over cluster "documents" (join texts per cluster) for cosine similarity between themes
+    joined = []
+    ids = []
+    for t in themes_all:
+        cid = int(t["id"])
+        ids.append(cid)
+        joined.append(" ".join(texts_by_cluster.get(cid, [])[:400]))  # limit per-cluster for speed
+
+    if not joined:
+        return themes_all[:n]
+
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.preprocessing import normalize as _sk_normalize
+    import numpy as np
+
+    vec = TfidfVectorizer(max_features=4000, stop_words="english", ngram_range=(1,2))
+    X = vec.fit_transform(joined).astype("float32")
+    X = _sk_normalize(X)
+    sims = (X @ X.T).A  # cosine sim (clusters x clusters)
+
+    # Normalize tweet_count to 0..1 for comparability
+    sizes = np.array([t["tweet_count"] for t in themes_all], dtype=float)
+    if sizes.max() > 0:
+        sizes = sizes / sizes.max()
+    else:
+        sizes = np.zeros_like(sizes)
+
+    selected = []
+    selected_idx = []
+    # Greedy MMR
+    for _ in range(min(n, len(themes_all))):
+        best_j = None
+        best_score = -1e9
+        for j in range(len(themes_all)):
+            if j in selected_idx:
+                continue
+            # diversity penalty = max similarity to anything already selected
+            if selected_idx:
+                div_pen = max(sims[j, k] for k in selected_idx)
+            else:
+                div_pen = 0.0
+            score = lam * sizes[j] - (1 - lam) * div_pen
+            if score > best_score:
+                best_score = score
+                best_j = j
+        selected_idx.append(best_j)
+        selected.append(themes_all[best_j])
+    return selected
+
 def compute_themes_payload(
+    df: Optional[pd.DataFrame] = None,
     parquet_stage2: str = "data/tweets_stage2_aspects.parquet",
     n_clusters: int = 6,  # Limited to 6 themes max
     emb_model: str = "sentence-transformers/all-MiniLM-L6-v2",
@@ -162,8 +220,9 @@ def compute_themes_payload(
     merge_similar: bool = True,
 ) -> dict:
     """Return {"updated_at": ts, "themes": [{id,name,summary,tweet_count,positive,negative,neutral}], "used_llm": bool}."""
-    assert os.path.exists(parquet_stage2), f"Missing {parquet_stage2}"
-    df = pd.read_parquet(parquet_stage2)
+    if df is None:
+        assert os.path.exists(parquet_stage2), f"Missing {parquet_stage2}"
+        df = pd.read_parquet(parquet_stage2)
 
     text_col = next((c for c in ["text_used","clean_tweet","text","fulltext"] if c in df.columns), None)
     if not text_col:
@@ -183,7 +242,7 @@ def compute_themes_payload(
     texts = df[text_col].astype(str).tolist()
 
     # ---------- Optimized Processing: Sample data for faster processing ----------
-    max_samples = 3000  # Limit to 3000 tweets for faster processing
+    max_samples = 5000  # Limit to 3000 tweets for faster processing
     if len(df) > max_samples:
         df_sample = df.sample(n=max_samples, random_state=42)
         texts_to_process = df_sample[text_col].astype(str).tolist()
@@ -213,6 +272,8 @@ def compute_themes_payload(
 
     # ---------- Clustering (Optimized) ----------
     from sklearn.cluster import KMeans
+    if n_clusters is None:
+        n_clusters = 6  # Default to 6 themes
     k = max(2, int(n_clusters))
     km = KMeans(n_clusters=k, random_state=42, n_init=3)  # Reduced n_init for speed
     labels = km.fit_predict(emb)
@@ -372,33 +433,33 @@ def compute_themes_payload(
     with open("data/theme_summaries.json", "w") as f:
         json.dump({int(k): v for k,v in summaries.items()}, f, ensure_ascii=False, indent=2)
 
+    # ---------- Build ranked list & diversity-aware seed (A) ----------
     counts = df["theme"].value_counts().to_dict()
-    themes = []
-    # Sort by tweet count (highest first) and limit to requested number of clusters
-    sorted_themes = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:n_clusters]
-    
-    # If we don't have enough clusters, generate more
-    if len(sorted_themes) < n_clusters:
-        # Generate additional clusters
-        additional_clusters_needed = n_clusters - len(sorted_themes)
+    ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+
+    # If we don't have enough clusters, generate more (keep your existing fallback)
+    if len(ranked) < n_clusters:
+        additional_clusters_needed = n_clusters - len(ranked)
         temp_n_clusters = n_clusters + additional_clusters_needed + 2  # Add buffer
-        
         from sklearn.cluster import KMeans
         from sentence_transformers import SentenceTransformer
-        
         model = SentenceTransformer(emb_model)
         embeddings = model.encode(df[text_col].astype(str).tolist())
-        
         kmeans = KMeans(n_clusters=temp_n_clusters, random_state=42, n_init=10)
         df["theme"] = kmeans.fit_predict(embeddings)
-        
-        # Get all themes and sort by count
         counts = df["theme"].value_counts().to_dict()
-        sorted_themes = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:n_clusters]
-    
-    for k_, count in sorted_themes:
+        ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+
+    # Build small corpus per cluster for similarity (A)
+    texts_by_cluster: Dict[int, List[str]] = {}
+    for tid, sub in df.groupby("theme"):
+        texts_by_cluster[int(tid)] = sub[text_col].astype(str).head(300).tolist()
+
+    # Build themes_all from ranked list (A)
+    themes_all: List[dict] = []
+    for k_, count in ranked:
         k = int(k_)
-        themes.append({
+        themes_all.append({
             "id": k,
             "name": theme_names.get(k, f"Theme {k}"),
             "summary": summaries.get(k, ""),
@@ -408,7 +469,10 @@ def compute_themes_payload(
             "neutral": neu_counts.get(k, 0),
         })
 
-    # Merge similar themes to avoid duplicates (if enabled)
+    # Diversity-aware selection instead of raw top-N (A)
+    themes = _mmr_select(themes_all, texts_by_cluster, n=n_clusters, lam=0.65)
+
+    # Merge similar themes to avoid duplicates (existing behavior)
     if merge_similar:
         final_themes = _merge_similar_themes(themes, similarity_threshold=0.5)
         # Only return themes with actual content (tweet_count > 0)

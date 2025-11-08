@@ -108,14 +108,17 @@ export default function AspectAnalysis() {
         return;
       }
       
-      // Create Excel data
-      const excelData = allTweets.map((tweet, index) => ({
-        'Tweet #': index + 1,
-        'Tweet Text': tweet,
-        'Aspect': sampleTweetsModal.aspect,
-        'Sentiment': sampleTweetsModal.sentiment,
-        'Date Range': `${start} to ${end}`
-      }));
+      // Create Excel data - tweets can be strings or objects
+      const excelData = allTweets.map((tweet, index) => {
+        const tweetText = typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+        return {
+          'Tweet #': index + 1,
+          'Tweet Text': tweetText,
+          'Aspect': sampleTweetsModal.aspect,
+          'Sentiment': sampleTweetsModal.sentiment,
+          'Date Range': `${start} to ${end}`
+        };
+      });
       
       // Convert to CSV (simpler than Excel for now)
       const csvContent = [
@@ -167,10 +170,13 @@ export default function AspectAnalysis() {
         getSampleTweets(start, end, aspect, 'negative', 1000)
       ]);
       
+      // Normalize tweets to strings if they're objects
+      const normalizeTweet = (tweet) => typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+      
       const allTweets = [
-        ...positiveTweets.map(tweet => ({ tweet, sentiment: 'positive' })),
-        ...neutralTweets.map(tweet => ({ tweet, sentiment: 'neutral' })),
-        ...negativeTweets.map(tweet => ({ tweet, sentiment: 'negative' }))
+        ...positiveTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'positive' })),
+        ...neutralTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'neutral' })),
+        ...negativeTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'negative' }))
       ];
       
       console.log('Fetched aspect tweets:', allTweets.length);
@@ -183,7 +189,7 @@ export default function AspectAnalysis() {
       // Create Excel data
       const excelData = allTweets.map((item, index) => ({
         'Tweet #': index + 1,
-        'Tweet Text': item.tweet,
+        'Tweet Text': typeof item.tweet === 'string' ? item.tweet : (item.tweet.text_clean || item.tweet.text || item.tweet.fulltext || ''),
         'Aspect': aspect,
         'Sentiment': item.sentiment,
         'Date Range': `${start} to ${end}`
@@ -226,10 +232,13 @@ export default function AspectAnalysis() {
         getSampleTweets(start, end, aspect, 'negative', 1000)
       ]);
       
+      // Normalize tweets to strings if they're objects
+      const normalizeTweet = (tweet) => typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+      
       const allTweets = [
-        ...positiveTweets.map(tweet => ({ tweet, sentiment: 'positive' })),
-        ...neutralTweets.map(tweet => ({ tweet, sentiment: 'neutral' })),
-        ...negativeTweets.map(tweet => ({ tweet, sentiment: 'negative' }))
+        ...positiveTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'positive' })),
+        ...neutralTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'neutral' })),
+        ...negativeTweets.map(tweet => ({ tweet: normalizeTweet(tweet), sentiment: 'negative' }))
       ];
       
       console.log('Fetched aspect tweets for PDF:', allTweets.length);
@@ -265,12 +274,15 @@ export default function AspectAnalysis() {
               <p><strong>Total Tweets:</strong> ${allTweets.length}</p>
               <p><strong>Breakdown:</strong> Positive: ${positiveTweets.length}, Neutral: ${neutralTweets.length}, Negative: ${negativeTweets.length}</p>
             </div>
-            ${allTweets.map((item, index) => `
+            ${allTweets.map((item, index) => {
+              const tweetText = typeof item.tweet === 'string' ? item.tweet : (item.tweet.text_clean || item.tweet.text || item.tweet.fulltext || '');
+              return `
               <div class="tweet sentiment-${item.sentiment}">
                 <div class="tweet-number">Tweet ${index + 1} (${item.sentiment})</div>
-                <div>${String(item.tweet).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                <div>${String(tweetText).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
               </div>
-            `).join('')}
+            `;
+            }).join('')}
           </body>
         </html>
       `;
@@ -415,10 +427,13 @@ export default function AspectAnalysis() {
           getSampleTweets(start, end, aspect, 'negative', 1000)
         ]);
         
+        // Normalize tweets to strings if they're objects
+        const normalizeTweet = (tweet) => typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+        
         allTweets.push(
-          ...positiveTweets.map(tweet => ({ tweet, aspect, sentiment: 'positive' })),
-          ...neutralTweets.map(tweet => ({ tweet, aspect, sentiment: 'neutral' })),
-          ...negativeTweets.map(tweet => ({ tweet, aspect, sentiment: 'negative' }))
+          ...positiveTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'positive' })),
+          ...neutralTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'neutral' })),
+          ...negativeTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'negative' }))
         );
       }
       
@@ -430,7 +445,7 @@ export default function AspectAnalysis() {
       // Create CSV data
       const csvData = allTweets.map((item, index) => ({
         'Tweet #': index + 1,
-        'Tweet Text': item.tweet,
+        'Tweet Text': typeof item.tweet === 'string' ? item.tweet : (item.tweet.text_clean || item.tweet.text || item.tweet.fulltext || ''),
         'Aspect': item.aspect,
         'Sentiment': item.sentiment,
         'Date Range': `${start} to ${end}`
@@ -475,10 +490,13 @@ export default function AspectAnalysis() {
           getSampleTweets(start, end, aspect, 'negative', 1000)
         ]);
         
+        // Normalize tweets to strings if they're objects
+        const normalizeTweet = (tweet) => typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+        
         allTweets.push(
-          ...positiveTweets.map(tweet => ({ tweet, aspect, sentiment: 'positive' })),
-          ...neutralTweets.map(tweet => ({ tweet, aspect, sentiment: 'neutral' })),
-          ...negativeTweets.map(tweet => ({ tweet, aspect, sentiment: 'negative' }))
+          ...positiveTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'positive' })),
+          ...neutralTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'neutral' })),
+          ...negativeTweets.map(tweet => ({ tweet: normalizeTweet(tweet), aspect, sentiment: 'negative' }))
         );
       }
       
@@ -888,11 +906,14 @@ export default function AspectAnalysis() {
                 </div>
               ) : (
                 <>
-                  {sampleTweetsModal.tweets.map((tweet, index) => (
-                    <div key={index} className="bg-slate-700/50 rounded-lg p-4 border border-slate-600/30">
-                      <p className="text-slate-200 text-sm leading-relaxed">{tweet}</p>
-                    </div>
-                  ))}
+                  {sampleTweetsModal.tweets.map((tweet, index) => {
+                    const tweetText = typeof tweet === 'string' ? tweet : (tweet.text_clean || tweet.text || tweet.fulltext || '');
+                    return (
+                      <div key={index} className="bg-slate-700/50 rounded-lg p-4 border border-slate-600/30">
+                        <p className="text-slate-200 text-sm leading-relaxed">{tweetText}</p>
+                      </div>
+                    );
+                  })}
                   
                   {/* Download buttons */}
                   <div className="flex items-center justify-center space-x-3 pt-4 border-t border-slate-600/30">

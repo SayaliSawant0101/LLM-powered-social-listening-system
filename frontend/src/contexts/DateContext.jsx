@@ -17,17 +17,17 @@ export function DateProvider({ children }) {
         console.log('Loading metadata from API...');
         const mr = await getMeta();
         console.log('Metadata loaded:', mr);
-        setMeta(mr);
-        setStart(mr?.min || "");
-        setEnd(mr?.max || "");
-        console.log('Date range set:', mr?.min, 'to', mr?.max);
+        // getMeta returns { date_range: { min, max } }
+        const dateRange = mr?.date_range || mr;
+        setMeta(dateRange);
+        setStart(dateRange?.min || "");
+        setEnd(dateRange?.max || "");
+        console.log('Date range set:', dateRange?.min, 'to', dateRange?.max);
       } catch (error) {
         console.error("Failed to load metadata:", error);
         console.error("Error details:", error.response?.data || error.message);
-        // Set fallback data if API fails
-        setMeta({ min: "2025-08-04", max: "2025-08-30" });
-        setStart("2025-08-04");
-        setEnd("2025-08-30");
+        // If API fails, don't set fallback dates - let user see the error
+        console.error("Failed to load metadata - no date range available");
       } finally {
         setLoading(false);
       }
@@ -35,12 +35,10 @@ export function DateProvider({ children }) {
 
     // Add timeout to prevent hanging
     const timeoutId = setTimeout(() => {
-      console.log('Metadata loading timeout - using fallback');
-      setMeta({ min: "2025-08-04", max: "2025-08-30" });
-      setStart("2025-08-04");
-      setEnd("2025-08-30");
+      console.log('Metadata loading timeout - waiting for API');
+      // Don't set fallback dates - wait for API response
       setLoading(false);
-    }, 5000);
+    }, 10000); // Increased timeout to 10 seconds
 
     loadMeta();
 

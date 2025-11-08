@@ -10,7 +10,7 @@ export default function RawData() {
   const downloadRawTweets = async (format) => {
     try {
       setDownloading(true);
-      const response = await fetch(`http://127.0.0.1:8000/tweets/raw?start=${start}&end=${end}&format=${format}`);
+      const response = await fetch(`http://localhost:3001/api/tweets/raw?start=${start}&end=${end}&format=${format}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -36,7 +36,7 @@ export default function RawData() {
   const downloadSentimentReport = async (format) => {
     try {
       setDownloading(true);
-      const response = await fetch(`http://127.0.0.1:8000/reports/sentiment?start=${start}&end=${end}&format=${format}`);
+      const response = await fetch(`http://localhost:3001/api/reports/sentiment?start=${start}&end=${end}&format=${format}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -62,7 +62,7 @@ export default function RawData() {
   const downloadAspectReport = async (format) => {
     try {
       setDownloading(true);
-      const response = await fetch(`http://127.0.0.1:8000/reports/aspects?start=${start}&end=${end}&format=${format}`);
+      const response = await fetch(`http://localhost:3001/api/reports/aspects?start=${start}&end=${end}&format=${format}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -88,7 +88,7 @@ export default function RawData() {
   const downloadThemeReport = async (format) => {
     try {
       setDownloading(true);
-      const response = await fetch(`http://127.0.0.1:8000/reports/themes?start=${start}&end=${end}&format=${format}`);
+      const response = await fetch(`http://localhost:3001/api/reports/themes?start=${start}&end=${end}&format=${format}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);

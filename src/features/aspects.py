@@ -7,6 +7,7 @@ from typing import List
 from transformers import pipeline
 
 DEFAULT_ASPECTS: List[str] = ["pricing", "delivery", "returns", "staff", "app/ux"]
+ASPECT_FALLBACK_LABEL = "Other"
 
 def pick_device_str() -> str:
     if torch.cuda.is_available():
@@ -31,7 +32,7 @@ def run_aspects(
     if fast_preview:
         for a in aspects:
             df[f"aspect_{a}"] = 0.0
-        df["aspect_dominant"] = "none"
+        df["aspect_dominant"] = ASPECT_FALLBACK_LABEL
         return df
 
     device = pick_device_str()
@@ -70,7 +71,8 @@ def run_aspects(
     arr = df[[f"aspect_{a}" for a in aspects]].values
     idxmax = arr.argmax(axis=1)
     maxval = arr.max(axis=1)
-    dom = np.where(maxval >= score_threshold, np.array(aspects)[idxmax], "none")
+    fallback = np.full_like(maxval, ASPECT_FALLBACK_LABEL, dtype=object)
+    dom = np.where(maxval >= score_threshold, np.array(aspects)[idxmax], fallback)
     df["aspect_dominant"] = dom
 
     return df

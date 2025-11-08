@@ -22,7 +22,7 @@ export default function AIInsights() {
       setExecLoading(true);
       setExecErr("");
       const q = new URLSearchParams({ start, end, sample_per_sentiment: String(250) }).toString();
-      const r = await fetch(`http://127.0.0.1:8000/executive-summary?${q}`);
+      const r = await fetch(`http://localhost:3001/api/executive-summary?${q}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       setExecData(j);
@@ -45,7 +45,7 @@ export default function AIInsights() {
         sample_size: String(80),
         ...(briefKeyword ? { keyword: briefKeyword } : {}),
       }).toString();
-      const r = await fetch(`http://127.0.0.1:8000/structured-brief?${q}`);
+      const r = await fetch(`http://localhost:3001/api/structured-brief?${q}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       setBriefData(j);

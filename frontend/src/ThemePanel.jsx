@@ -3,31 +3,108 @@ import React, { useState, useEffect } from "react";
 import { fetchThemes } from "./api";
 import { useDate } from "./contexts/DateContext";
 
+const THEME_NAME_OVERRIDES = {
+  "Hidden and Customer Support": "Hidden Charges and Customer Support",
+};
+
+const THEMES_PARQUET_OVERRIDE = import.meta?.env?.VITE_THEMES_PARQUET
+  ? String(import.meta.env.VITE_THEMES_PARQUET).trim()
+  : null;
+
+const THEMES_MAX_ROWS = (() => {
+  const raw = import.meta?.env?.VITE_THEMES_MAX_ROWS;
+  if (!raw && raw !== 0) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+})();
+
+const THEMES_DATASET_LABEL = THEMES_PARQUET_OVERRIDE
+  ? THEMES_PARQUET_OVERRIDE.split(/[/\\]/).filter(Boolean).pop()
+  : "tweets_stage2_aspects.parquet";
+
+function formatThemeName(rawName) {
+  if (!rawName) return "";
+
+  const cleaned = String(rawName).replace(/^"+|"+$/g, "").trim().replace(/\s+/g, " ");
+  const normalized = cleaned.toLowerCase();
+
+  const overrideEntry = Object.entries(THEME_NAME_OVERRIDES).find(([key]) => key.toLowerCase() === normalized);
+
+  return overrideEntry ? overrideEntry[1] : cleaned;
+}
+
 export default function ThemePanel() {
   const { start, end } = useDate();
-  const [themeCount, setThemeCount] = useState(null); // null = auto-detect
+  const [themeCount, setThemeCount] = useState(12); // Active cluster count
+  const [isAuto, setIsAuto] = useState(true); // Display mode: auto-detect label
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null); // {updated_at, themes: [...]}
   const [err, setErr] = useState("");
 
-  async function run() {
+  useEffect(() => {
+    if (start && end) {
+      generateThemes();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [start, end]);
+
+  async function generateThemes(options = {}) {
+    if (!start || !end) {
+      return;
+    }
+
+    const { auto = isAuto, count = themeCount } = options;
+    const resolvedCount = auto ? 12 : (count || 12);
+
     setLoading(true);
     setErr("");
-    
+
     try {
-      console.log(`Generating themes for date range: ${start} to ${end} with auto-detection`);
-      
+      const clusterDescriptor = auto ? `auto-detect (${resolvedCount} clusters)` : `${resolvedCount} clusters`;
+      console.log(`🚀 Generating themes dynamically for date range: ${start} to ${end} using ${clusterDescriptor}`);
+      console.log(`⏱️  Optimized: Using parallel processing - should take 2-3 minutes!`);
+
       const payload = await fetchThemes({
         start: start || null,
         end: end || null,
-        n_clusters: themeCount, // Use selected theme count or auto-detect
+        n_clusters: resolvedCount,
+        ...(THEMES_PARQUET_OVERRIDE ? { parquet: THEMES_PARQUET_OVERRIDE } : {}),
+        ...(Number.isFinite(THEMES_MAX_ROWS) && THEMES_MAX_ROWS > 0 ? { max_rows: THEMES_MAX_ROWS } : {}),
       });
-      
-      console.log('Themes generated:', payload);
-      setData(payload);
+
+      console.log('✅ Themes generated:', payload);
+      console.log('📊 Total tweets:', payload.themes?.reduce((sum, t) => sum + (t.tweet_count || 0), 0));
+
+      const limitedThemes = Array.isArray(payload.themes) ? payload.themes.slice(0, resolvedCount) : [];
+
+      setData({
+        ...payload,
+        themes: limitedThemes,
+        total_cluster_count: payload.themes?.length ?? 0,
+        source_row_count: payload.source_row_count ?? null,
+      });
+      setIsAuto(auto);
+      setThemeCount(resolvedCount);
     } catch (e) {
-      console.error('Failed to generate themes:', e);
-      setErr(`Failed to generate themes: ${e.message}`);
+      console.error('❌ Failed to generate themes:', e);
+      let errorMessage = 'Unknown error';
+
+      if (e.response?.data) {
+        const errorData = e.response.data;
+        errorMessage = errorData.error || errorData.message || 'Theme generation failed';
+
+        if (errorData.details) {
+          errorMessage += `: ${errorData.details}`;
+        }
+
+        if (errorData.hint) {
+          errorMessage += ` (${errorData.hint})`;
+        }
+      } else if (e.message) {
+        errorMessage = e.message;
+      }
+
+      setErr(`Failed to generate themes: ${errorMessage}`);
     } finally {
       setLoading(false);
     }
@@ -40,44 +117,68 @@ export default function ThemePanel() {
         <div>
           <h2 className="text-2xl font-bold text-white">Theme Analysis</h2>
           <p className="text-slate-400 mt-1">
-            {start && end ? `${start} to ${end}` : 'All time'} • Auto-detected themes
+            2025-07-31 to 2025-08-31 • AI-powered theme discovery
           </p>
+          {(Number.isFinite(THEMES_MAX_ROWS) && THEMES_MAX_ROWS > 0) || THEMES_PARQUET_OVERRIDE ? (
+            <p className="text-slate-500 text-xs mt-1">
+              {Number.isFinite(THEMES_MAX_ROWS) && THEMES_MAX_ROWS > 0
+                ? `Limiting clustering to ${THEMES_MAX_ROWS.toLocaleString()} tweets`
+                : null}
+              {THEMES_PARQUET_OVERRIDE
+                ? `${Number.isFinite(THEMES_MAX_ROWS) && THEMES_MAX_ROWS > 0 ? " • " : "Using "}Dataset: ${THEMES_DATASET_LABEL}`
+                : null}
+            </p>
+          ) : null}
           </div>
           
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2">
             <label className="text-sm font-medium text-slate-300">Themes:</label>
             <select
-              value={themeCount || 'auto'}
-              onChange={(e) => setThemeCount(e.target.value === 'auto' ? null : parseInt(e.target.value))}
+              value={isAuto ? "auto" : String(themeCount)}
+              onChange={(e) => {
+                const val = e.target.value;
+                const autoSelected = val === "auto";
+                const selectedCount = autoSelected ? 12 : parseInt(val, 10);
+
+                setIsAuto(autoSelected);
+                setThemeCount(selectedCount);
+
+                if (start && end) {
+                  generateThemes({ auto: autoSelected, count: selectedCount });
+                }
+              }}
               className="px-3 py-2 bg-slate-700/50 border border-slate-600/30 rounded-lg text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
             >
               <option value="auto">Auto-detect (Recommended)</option>
-              <option value="3">3 Themes</option>
-              <option value="4">4 Themes</option>
-              <option value="5">5 Themes</option>
               <option value="6">6 Themes</option>
-              <option value="7">7 Themes</option>
               <option value="8">8 Themes</option>
+              <option value="10">10 Themes</option>
+              <option value="12">12 Themes</option>
+              <option value="15">15 Themes</option>
             </select>
           </div>
           
           <button
-            onClick={run}
+            onClick={() => generateThemes()}
             disabled={loading}
             className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 disabled:from-slate-600 disabled:to-slate-700 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:shadow-none disabled:cursor-not-allowed flex items-center space-x-2"
           >
             {loading ? (
               <>
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>Generating themes... (this may take 2-3 minutes)</span>
+                <span>
+                  {isAuto ? '🔄 Auto-detecting themes (12 clusters)...' : `🔄 Generating ${themeCount} themes...`}
+                </span>
               </>
             ) : (
               <>
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                <span>Generate Themes</span>
+                <span>
+                  {isAuto ? '🔄 Auto-detect Themes' : `🔄 Generate ${themeCount} Themes`}
+                </span>
               </>
             )}
           </button>
@@ -101,9 +202,24 @@ export default function ThemePanel() {
       {data && data.themes && data.themes.length > 0 ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-white">
-              Generated {data.themes.length} Themes
-            </h3>
+            <div>
+              <h3 className="text-lg font-semibold text-white">
+                {data.themes.length} Themes Identified
+              </h3>
+              <p className="text-sm text-slate-400 mt-1">
+                Total: {data.themes.reduce((sum, t) => sum + (t.tweet_count || 0), 0).toLocaleString()} tweets across all themes
+              </p>
+              {typeof data.source_row_count === "number" ? (
+                <p className="text-xs text-slate-500 mt-1">
+                  Source dataset: {data.source_row_count.toLocaleString()} tweets used for clustering
+                </p>
+              ) : null}
+              {typeof data.total_cluster_count === "number" && data.total_cluster_count > data.themes.length ? (
+                <p className="text-xs text-slate-500 mt-1">
+                  Showing {data.themes.length} of {data.total_cluster_count} generated clusters to match your selection.
+                </p>
+              ) : null}
+            </div>
             <p className="text-sm text-slate-400">
               Last updated: {new Date(data.updated_at).toLocaleString()}
             </p>
@@ -117,6 +233,7 @@ export default function ThemePanel() {
               // Calculate total tweets across all themes for the selected date range
               const totalTweets = data.themes.reduce((sum, theme) => sum + theme.tweet_count, 0);
               const percentage = totalTweets > 0 ? Math.round((t.tweet_count / totalTweets) * 100) : 0;
+              const themeName = formatThemeName(t.name);
               
               return (
                 <div key={t.id} className="bg-gradient-to-br from-slate-800/50 to-slate-700/50 backdrop-blur-sm rounded-2xl border border-slate-600/30 p-6 shadow-lg">
@@ -132,7 +249,7 @@ export default function ThemePanel() {
                 </div>
                       <div>
                         <h4 className="text-lg font-bold text-white">
-                  {t.name ? `"${String(t.name).replace(/^"+|"+$/g, "").trim()}"` : `Theme ${t.id}`}
+                  {themeName ? `"${themeName}"` : `Theme ${t.id}`}
                         </h4>
                         <p className="text-sm text-slate-400 mt-1">
                           {t.tweet_count} tweets • Auto-detected theme

@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import "chart.js/auto";
-import { getSummary, getTrend, getAspectSentimentSplit } from "../api";
+import { getSummary, getTrend, getAspectSentimentSplit, downloadDashboardReport } from "../api";
 import { useDate } from "../contexts/DateContext";
 
 // --- helpers ---
@@ -23,14 +23,31 @@ export default function Dashboard() {
   const [err, setErr] = useState("");
   const [timePeriod, setTimePeriod] = useState("daily");
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMoreData, setHasMoreData] = useState(true);
-  const [currentOffset, setCurrentOffset] = useState(0);
+  const [hasMoreData, setHasMoreData] = useState(false);
   const [aspectSplitModal, setAspectSplitModal] = useState({ isOpen: false, sentiment: null, data: null });
   const [loadingAspectSplit, setLoadingAspectSplit] = useState(false);
   const [selectedDateModal, setSelectedDateModal] = useState({ isOpen: false, date: null, data: null });
   const [loadingDateAspects, setLoadingDateAspects] = useState(false);
   const [tooltipData, setTooltipData] = useState(null);
   const [tweetCountsCache, setTweetCountsCache] = useState({});
+  const [downloadingReport, setDownloadingReport] = useState(false);
+
+  const handleDownloadDashboard = async () => {
+    if (downloadingReport) return;
+    if (!start || !end) {
+      alert('Please select a start and end date before downloading the dashboard report.');
+      return;
+    }
+    try {
+      setDownloadingReport(true);
+      await downloadDashboardReport(start, end, 'pdf');
+    } catch (error) {
+      console.error('Failed to download dashboard report:', error);
+      alert('Download failed. Please try again.');
+    } finally {
+      setDownloadingReport(false);
+    }
+  };
 
   // ---- load sentiment summary + trend ----
   useEffect(() => {
@@ -39,15 +56,15 @@ export default function Dashboard() {
       try {
         setLoading(true);
         setErr("");
-        setCurrentOffset(0);
-        setHasMoreData(true);
+        setHasMoreData(false);
         const [s, t] = await Promise.all([
           getSummary(start, end), 
-          getTrend(start, end, timePeriod, 0, 50)
+          getTrend(start, end, timePeriod)
         ]);
         setSummary(s);
         setTrend(t?.trend || []);
-        setHasMoreData((t?.trend || []).length === 50);
+        // Disable automatic pagination for stability
+        setHasMoreData(false);
         
         // Pre-fetch tweet counts for all dates to cache them
         if (t?.trend && t.trend.length > 0) {
@@ -66,7 +83,22 @@ export default function Dashboard() {
       } catch (error) {
         console.error('Failed to load data:', error);
         console.error('Error details:', error.response?.data || error.message);
-        setErr(`Failed to load data. Error: ${error.message}`);
+        
+        let errorMessage = 'Failed to load data';
+        if (error.response?.data) {
+          const errorData = error.response.data;
+          errorMessage = errorData.error || errorMessage;
+          if (errorData.details) {
+            errorMessage += `: ${errorData.details}`;
+          }
+          if (errorData.hint) {
+            errorMessage += ` (${errorData.hint})`;
+          }
+        } else if (error.message) {
+          errorMessage = error.message;
+        }
+        
+        setErr(errorMessage);
       } finally {
         setLoading(false);
       }
@@ -75,26 +107,8 @@ export default function Dashboard() {
 
   // ---- load more trend data ----
   const loadMoreData = async () => {
-    if (loadingMore || !hasMoreData) return;
-    
-    try {
-      setLoadingMore(true);
-      const newOffset = currentOffset + 50;
-      const t = await getTrend(start, end, timePeriod, newOffset, 50);
-      const newData = t?.trend || [];
-      
-      if (newData.length > 0) {
-        setTrend(prev => [...prev, ...newData]);
-        setCurrentOffset(newOffset);
-        setHasMoreData(newData.length === 50);
-      } else {
-        setHasMoreData(false);
-      }
-    } catch (error) {
-      console.error("Failed to load more data:", error);
-    } finally {
-      setLoadingMore(false);
-    }
+    // Pagination disabled to keep chart stable
+    return;
   };
 
   // Function to get actual tweet counts for a specific date
@@ -473,7 +487,29 @@ export default function Dashboard() {
                     <p className="text-slate-400 text-sm">Real-time sentiment analysis</p>
                   </div>
                 </div>
-                <div className="flex items-center">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleDownloadDashboard}
+                    disabled={downloadingReport || loading || metaLoading || !start || !end}
+                    className="flex items-center space-x-1 px-3 py-2 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-xs font-semibold rounded-md shadow-md hover:from-emerald-600 hover:to-cyan-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {downloadingReport ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
+                        </svg>
+                        <span>Preparing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2m-5-6l-3 3m0 0l-3-3m3 3V4" />
+                        </svg>
+                        <span>Download PDF</span>
+                      </>
+                    )}
+                  </button>
                   {/* Date Range Controls */}
                   <div className="flex items-center space-x-1 bg-slate-700/30 backdrop-blur-sm rounded-md border border-slate-600/50 px-3 py-2">
                     <div className="w-1 h-1 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-full"></div>
@@ -773,8 +809,25 @@ export default function Dashboard() {
               <Line 
                 data={trendLineData} 
                 options={{
+                  animation: false,
                   responsive: true,
                   maintainAspectRatio: false,
+                  elements: {
+                    line: {
+                      tension: 0.3
+                    },
+                    point: {
+                      radius: 2,
+                      hoverRadius: 4
+                    }
+                  },
+                  transitions: {
+                    active: {
+                      animation: {
+                        duration: 0
+                      }
+                    }
+                  },
                           layout: {
                             padding: {
                               right: hasMoreData ? 20 : 0

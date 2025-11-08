@@ -241,9 +241,13 @@ def _aspect_top(adf: Optional[pd.DataFrame], start, end, k: int = 6) -> List[Dic
     sub = adf.loc[mask]
     if sub.empty or "aspect_dominant" not in sub.columns:
         return []
+    from src.features.aspects import ASPECT_FALLBACK_LABEL
+
     vc = sub["aspect_dominant"].value_counts().head(k)
     out = []
     for name, cnt in vc.items():
+        if name == ASPECT_FALLBACK_LABEL:
+            continue
         row = {"aspect": name, "count": int(cnt)}
         if "sentiment_label" in sub.columns:
             ss = sub[sub["aspect_dominant"]==name]["sentiment_label"].value_counts().to_dict()

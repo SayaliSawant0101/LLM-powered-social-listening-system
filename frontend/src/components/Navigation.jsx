@@ -1,5 +1,5 @@
 // frontend/src/components/Navigation.jsx
-import React from "react";
+import React, { useId } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useDate } from "../contexts/DateContext";
 
@@ -11,6 +11,69 @@ function iso(x) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+// Right-side brand graphic removed per request
+
+function HeaderBrand() {
+  const sparkGradientId = useId();
+  const blueGradientId = useId();
+  const badgeShadowId = useId();
+
+  return (
+    <div className="flex items-center space-x-3">
+      <svg
+        viewBox="0 0 64 64"
+        className="h-11 w-11 drop-shadow-sm"
+        role="img"
+        aria-label="Walmart spark"
+      >
+        <defs>
+          <radialGradient id={badgeShadowId} cx="32" cy="32" r="28" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.15" />
+            <stop offset="100%" stopColor="#1e293b" stopOpacity="0.08" />
+          </radialGradient>
+          <linearGradient id={blueGradientId} x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#1d4ed8" />
+            <stop offset="100%" stopColor="#1e3a8a" />
+          </linearGradient>
+          <linearGradient id={sparkGradientId} x1="0" y1="-8" x2="0" y2="8" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#fbbf24" />
+            <stop offset="100%" stopColor="#f59e0b" />
+          </linearGradient>
+        </defs>
+
+        <circle cx="32" cy="32" r="30" fill="#0f172a" />
+        <circle cx="32" cy="32" r="26" fill={`url(#${badgeShadowId})`} />
+        <circle cx="32" cy="32" r="22" fill={`url(#${blueGradientId})`} />
+
+        <g transform="translate(32 32)">
+          {[0, 60, 120, 180, 240, 300].map((angle, idx) => (
+            <rect
+              key={`spark-${idx}`}
+              x="-2.2"
+              y="-15"
+              width="4.4"
+              height="11"
+              rx="2.2"
+              transform={`rotate(${angle})`}
+              fill={`url(#${sparkGradientId})`}
+            />
+          ))}
+        </g>
+      </svg>
+
+      <div className="flex flex-col leading-tight">
+        <span className="text-[1.05rem] font-semibold tracking-[0.02em] text-slate-50">
+          <span className="text-[#0071ce]">Walmart</span>
+          <span className="ml-1 text-slate-100/90">Social Intelligence</span>
+        </span>
+        <span className="text-[0.6rem] uppercase tracking-[0.32em] text-slate-400">
+          Advanced Analytics Platform
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export default function Navigation() {
@@ -49,26 +112,11 @@ export default function Navigation() {
     <>
       {/* Top Navigation - Branding Only */}
       <nav className="bg-slate-800/95 backdrop-blur-md border-b border-slate-700 sticky top-0 z-50">
-        <div className="max-w-8xl mx-auto px-6 py-4">
+        <div className="w-full px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-cyan-400 rounded-2xl flex items-center justify-center shadow-lg">
-                <span className="text-slate-900 font-bold text-xl">W</span>
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-white">Walmart Social Intelligence</h1>
-                <p className="text-slate-400">Advanced Analytics Platform</p>
-              </div>
-            </div>
-            
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2 bg-slate-700/50 px-3 py-2 rounded-xl">
-                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
-                <span className="text-sm text-slate-300 font-medium">Live Data</span>
-              </div>
-              <div className="text-sm text-slate-400 bg-slate-700/30 px-3 py-2 rounded-xl">
-                API Connected
-              </div>
+            <HeaderBrand />
+            <div className="flex items-center justify-end space-x-4">
+              {/* Right-side status area intentionally left blank */}
             </div>
           </div>
         </div>

@@ -1833,45 +1833,65 @@ app.get("/api/reports/dashboard", async (req, res) => {
     doc.fontSize(16).text('Top Aspect Drivers', { underline: true });
     doc.moveDown();
 
-    doc.fontSize(10).font('Helvetica-Bold');
-    doc.text('Aspect', startX, doc.y);
-    doc.text('Positive', startX + 120, doc.y);
-    doc.text('Negative', startX + 190, doc.y);
-    doc.text('Neutral', startX + 260, doc.y);
-    doc.text('Total', startX + 330, doc.y);
-    doc.text('Positive %', startX + 390, doc.y);
-    doc.text('Negative %', startX + 460, doc.y);
-    doc.font('Helvetica');
+    const tableStartX = doc.page.margins.left;
+    const tableRowHeight = 18;
+    const headerHeight = 14;
+    const aspectColumns = [
+      { label: 'Aspect', width: 150, align: 'left' },
+      { label: 'Positive', width: 45, align: 'right' },
+      { label: 'Negative', width: 45, align: 'right' },
+      { label: 'Neutral', width: 45, align: 'right' },
+      { label: 'Total', width: 50, align: 'right' },
+      { label: 'Positive %', width: 55, align: 'right' },
+      { label: 'Negative %', width: 55, align: 'right' },
+      { label: 'Neutral %', width: 55, align: 'right' }
+    ];
 
-    yPos = doc.y + rowHeight;
+    const drawHeaderRow = () => {
+      let colX = tableStartX;
+      doc.fontSize(10).font('Helvetica-Bold');
+      aspectColumns.forEach((col) => {
+        doc.text(col.label, colX, currentY, { width: col.width, align: col.align });
+        colX += col.width;
+      });
+      currentY += headerHeight;
+      doc.font('Helvetica');
+    };
+
+    let currentY = doc.y;
+    drawHeaderRow();
+
     aspectData.forEach(([aspect, counts]) => {
-      if (yPos + rowHeight > pageHeight) {
+      if (currentY + tableRowHeight > pageHeight) {
         doc.addPage();
-        yPos = doc.page.margins.top;
-        doc.fontSize(10).font('Helvetica-Bold');
-        doc.text('Aspect', startX, yPos);
-        doc.text('Positive', startX + 120, yPos);
-        doc.text('Negative', startX + 190, yPos);
-        doc.text('Neutral', startX + 260, yPos);
-        doc.text('Total', startX + 330, yPos);
-        doc.text('Positive %', startX + 390, yPos);
-        doc.text('Negative %', startX + 460, yPos);
-        doc.font('Helvetica');
-        yPos += rowHeight;
+        currentY = doc.page.margins.top;
+        drawHeaderRow();
       }
 
       const posPct = counts.total ? ((counts.positive / counts.total) * 100).toFixed(1) : '0.0';
       const negPct = counts.total ? ((counts.negative / counts.total) * 100).toFixed(1) : '0.0';
-
+      const neuPct = counts.total ? ((counts.neutral / counts.total) * 100).toFixed(1) : '0.0';
       const aspectName = aspect.charAt(0).toUpperCase() + aspect.slice(1).replace(/_/g, ' ');
-      doc.text(aspectName, startX, yPos);
-      doc.text(String(counts.positive), startX + 120, yPos);
-      doc.text(String(counts.negative), startX + 190, yPos);
-      doc.text(String(counts.neutral), startX + 260, yPos);
-      doc.text(String(counts.total), startX + 330, yPos);
-      doc.text(`${posPct}%`, startX + 390, yPos);
-      doc.text(`${negPct}%`, startX + 460, yPos);
-      yPos += rowHeight;
+
+      const rowValues = [
+        aspectName,
+        String(counts.positive),
+        String(counts.negative),
+        String(counts.neutral),
+        String(counts.total),
+        `${posPct}%`,
+        `${negPct}%`,
+        `${neuPct}%`
+      ];
+
+      let colX = tableStartX;
+      rowValues.forEach((value, idx) => {
+        const col = aspectColumns[idx];
+        doc.text(value, colX, currentY, { width: col.width, align: col.align });
+        colX += col.width;
+      });
+
+      currentY += tableRowHeight;
     });
 
     doc.end();

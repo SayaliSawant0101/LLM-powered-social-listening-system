@@ -484,7 +484,7 @@ export default function Dashboard() {
                   </div>
                   <div className="px-2 py-1">
                     <h1 className="text-xl font-bold text-white">Analytics Dashboard</h1>
-                    <p className="text-slate-400 text-sm">Real-time sentiment analysis</p>
+                    <p className="text-slate-400 text-sm">Sentiment analysis snapshot</p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">

@@ -10,13 +10,13 @@ End‑to‑end pipeline for Twitter/X listening about Walmart: cleaning → sent
 
 ```bash
 # clone or unzip locally, then:
-python3 -m venv .venv
+python3 -m venv .venv       # Windows: python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -U pip
 pip install -r requirements.txt
 
 # set env
-cp .env.example .env
+cp .env.example .env        # Windows: copy .env.example .env
 # open .env and set OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 ```
 

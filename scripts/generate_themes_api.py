@@ -32,13 +32,16 @@ def main():
     parser.add_argument("--parquet", type=str, default="data/tweets_stage2_aspects.parquet", help="Input parquet file")
     parser.add_argument("--max-rows", type=int, default=None, help="Maximum number of tweets to use (after filtering)")
     parser.add_argument("--openai-key", type=str, default=None, help="OpenAI API key")
+    parser.add_argument("--fast-mode", action="store_true", help="Skip OpenAI calls for faster generation (use keyword-based names)")
     
     args = parser.parse_args()
     
-    # Get OpenAI key - prioritize command line arg, then env var
-    openai_key = args.openai_key
-    if not openai_key:
-        openai_key = os.getenv("OPENAI_API_KEY")
+    # Get OpenAI key - skip if fast mode is enabled
+    openai_key = None
+    if not args.fast_mode:
+        openai_key = args.openai_key
+        if not openai_key:
+            openai_key = os.getenv("OPENAI_API_KEY")
     
     # Debug: Check if key is loaded
     import sys

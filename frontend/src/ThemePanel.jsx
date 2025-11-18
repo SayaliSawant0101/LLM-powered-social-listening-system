@@ -11,11 +11,12 @@ const THEMES_PARQUET_OVERRIDE = import.meta?.env?.VITE_THEMES_PARQUET
   ? String(import.meta.env.VITE_THEMES_PARQUET).trim()
   : null;
 
+// Use 15000 tweets by default (server will use this if max_rows is not provided)
 const THEMES_MAX_ROWS = (() => {
   const raw = import.meta?.env?.VITE_THEMES_MAX_ROWS;
-  if (!raw && raw !== 0) return null;
+  if (!raw && raw !== 0) return 15000; // Default to 15000 if not set
   const parsed = Number.parseInt(raw, 10);
-  return Number.isNaN(parsed) ? null : parsed;
+  return Number.isNaN(parsed) ? 15000 : parsed; // Default to 15000 if invalid
 })();
 
 const THEMES_DATASET_LABEL = THEMES_PARQUET_OVERRIDE
@@ -117,7 +118,7 @@ export default function ThemePanel() {
         <div>
           <h2 className="text-2xl font-bold text-white">Theme Analysis</h2>
           <p className="text-slate-400 mt-1">
-            2025-07-31 to 2025-08-31 • AI-powered theme discovery
+            {start && end ? `${start} to ${end}` : 'Select date range'} • AI-powered theme discovery
           </p>
           {(Number.isFinite(THEMES_MAX_ROWS) && THEMES_MAX_ROWS > 0) || THEMES_PARQUET_OVERRIDE ? (
             <p className="text-slate-500 text-xs mt-1">
@@ -155,7 +156,6 @@ export default function ThemePanel() {
               <option value="8">8 Themes</option>
               <option value="10">10 Themes</option>
               <option value="12">12 Themes</option>
-              <option value="15">15 Themes</option>
             </select>
           </div>
           

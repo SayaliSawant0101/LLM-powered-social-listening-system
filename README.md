@@ -20,9 +20,10 @@ cp .env.example .env        # Windows: copy .env.example .env
 # open .env and set OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 ```
 
-### Run the demo app
+### Run the frontend
 ```bash
-streamlit run app/streamlit_app.py
+cd frontend
+npm run dev
 ```
 
 ### CLI summarizer
@@ -34,8 +35,7 @@ python scripts/generate_summary.py   --data data/tweets_clean.parquet   --start 
 
 ```
 walmart_social_listener/
-├─ app/
-│  └─ streamlit_app.py            # Live demo UI (date range + keyword → LLM summary)
+├─ frontend/                       # React frontend (Vite + Tailwind CSS)
 ├─ data/                          # Put your CSV/XLSX/Parquet here (kept out of git)
 ├─ notebooks/
 │  └─ Walmart_Social_Media_Listener_V1.ipynb   # Move your current ipynb here
@@ -86,35 +86,29 @@ git pull            # bring latest from remote
 git checkout -b feat/llm-summary
 # ... edit, run, test ...
 git add -A
-git commit -m "feat: add LLM executive summary + streamlit app"
+git commit -m "feat: add LLM executive summary + React frontend"
 git push -u origin feat/llm-summary
 # open a PR, review, merge
 ```
 
 ## 4) Deploy a live demo
 
-**Streamlit Community Cloud (fastest):**
-1. Push repo to GitHub (public or private with access).
-2. Go to [Streamlit Cloud], "New app" → select this repo, pick `app/streamlit_app.py`.
-3. In **Advanced settings → Secrets**, add `OPENAI_API_KEY`.
-4. Deploy. Share the URL.
+**Frontend (React):**
+1. Build the frontend: `cd frontend && npm run build`
+2. Deploy to Netlify/Vercel/Cloudflare Pages
+3. Set environment variables for API endpoints
 
-**Hugging Face Spaces:**
-1. Create a new Space → Framework: Streamlit.
-2. Connect your GitHub or upload files (ensure `requirements.txt`).
-3. Add secret `OPENAI_API_KEY`.
-4. Spaces builds and serves the app.
-
-> Note: Netlify is for static sites; for Python apps use Streamlit Cloud or HF Spaces and link to it from your portfolio.
+**Backend (Node.js/Express):**
+1. Deploy `server/server.js` to services like Railway, Render, or Heroku
+2. Ensure Python dependencies are available for theme generation scripts
+3. Set environment variables: `OPENAI_API_KEY`, data paths, etc.
 
 ## 5) Expected columns
 
-`streamlit_app.py` expects a file (CSV/XLSX/Parquet) with at least:
-- `clean_tweet` (str): cleaned text
-- `created_at` or `date` (datetime/ISO or parseable string)
-- Optional: `sentiment_label`, `aspect`, `topic_id`, `topic_keywords`
-
-You can adapt column names in `app/streamlit_app.py`.
+The system expects parquet files (CSV/XLSX/Parquet) with at least:
+- `clean_tweet` or `text` (str): cleaned text
+- `createdat` or `created_at` or `date` (datetime/ISO or parseable string)
+- Optional: `sentiment_label`, `aspect_dominant`, `theme`, etc.
 
 ## 6) OpenAI usage
 We use the official SDK (`openai`), via the **Responses API** by default. See comments in `src/llm/summary.py` to switch to Chat Completions if you prefer.

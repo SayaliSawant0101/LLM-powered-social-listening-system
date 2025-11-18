@@ -26,9 +26,9 @@ const THEMES_STAGE2_OVERRIDE = process.env.THEMES_PARQUET_PATH
 const THEMES_MAX_ROWS = (() => {
   if (process.env.THEMES_MAX_ROWS !== undefined) {
     const parsed = parseInt(process.env.THEMES_MAX_ROWS, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 10000;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15000;
   }
-  return 10000; // enforce <=10k rows by default
+  return 15000; // default to 15k rows
 })();
 const NORMALIZED_DATA_DIR = path.normalize(DATA_DIR).toLowerCase();
 const THEME_NAMES = path.join(DATA_DIR, "theme_names.json");

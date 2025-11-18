@@ -518,9 +518,14 @@ def compute_themes_payload(
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors="coerce", utc=True).dt.tz_localize(None)
         if start_date:
-            df = df[df[date_col] >= pd.to_datetime(start_date)]
+            start_dt = pd.to_datetime(start_date)
+            df = df[df[date_col] >= start_dt]
+            print(f"[Theme Generation] Filtered by start_date >= {start_date}: {len(df)} tweets remaining", file=sys.stderr)
         if end_date:
-            df = df[df[date_col] <= pd.to_datetime(end_date)]
+            # Include the entire end date by adding 1 day and using < instead of <=
+            end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            df = df[df[date_col] < end_dt]
+            print(f"[Theme Generation] Filtered by end_date <= {end_date}: {len(df)} tweets remaining", file=sys.stderr)
 
     if max_rows is not None and max_rows > 0 and len(df) > max_rows:
         if date_col:
@@ -539,7 +544,7 @@ def compute_themes_payload(
     texts = df[text_col].astype(str).tolist()
 
     # ---------- Optimized Processing: Sample data for faster processing ----------
-    max_samples = 3000  # Reduced to 3000 for faster processing (was 5000)
+    max_samples = 2500  # Reduced to 2500 for faster processing (was 3000)
     if len(df) > max_samples:
         df_sample = df.sample(n=max_samples, random_state=42)
         texts_to_process = df_sample[text_col].astype(str).tolist()
@@ -578,13 +583,16 @@ def compute_themes_payload(
     km = KMeans(n_clusters=k_actual, random_state=42, n_init=1)  # Reduced to 1 for maximum speed
     labels = km.fit_predict(emb)
     
-    # Map labels back to full dataset
+    # Map labels back to full dataset (optimized: use larger batch size for faster processing)
     if len(df) > max_samples:
         # For sampled data, assign clusters to nearest centroids for remaining data
-        remaining_texts = df[~df.index.isin(df_sample.index)][text_col].astype(str).tolist()
+        remaining_df = df[~df.index.isin(df_sample.index)]
+        remaining_texts = remaining_df[text_col].astype(str).tolist()
         if remaining_texts:
+            print(f"[Theme Generation] Assigning {len(remaining_texts)} remaining tweets to clusters (using batch_size=64 for speed)...", file=sys.stderr)
             if not FORCE_TFIDF and 'model' in locals():
-                remaining_embeddings = model.encode(remaining_texts, batch_size=32, show_progress_bar=False)
+                # Use larger batch size for faster processing
+                remaining_embeddings = model.encode(remaining_texts, batch_size=64, show_progress_bar=False, convert_to_numpy=True)
             else:
                 remaining_embeddings = vec.transform(remaining_texts).astype("float32")
                 remaining_embeddings = normalize(remaining_embeddings)
@@ -593,7 +601,7 @@ def compute_themes_payload(
             
             # Combine labels
             df.loc[df_sample.index, "theme"] = labels
-            df.loc[~df.index.isin(df_sample.index), "theme"] = remaining_labels
+            df.loc[remaining_df.index, "theme"] = remaining_labels
         else:
             df["theme"] = labels
     else:
@@ -913,7 +921,7 @@ def compute_themes_payload(
                 ],
                 temperature=0.2,
                 max_tokens=50,
-                timeout=30  # Reduced timeout since we're parallelizing
+                timeout=60  # Increased timeout to handle rate limits better
             )
             t = (resp.choices[0].message.content or "").strip().strip('"').strip("'")
             t = t.replace("Theme: ", "").replace("Title: ", "").replace("Name: ", "").replace("**", "").replace("*", "").strip()
@@ -1009,8 +1017,8 @@ def compute_themes_payload(
                     {"role":"user","content":SUMMARY_USER_TMPL.format(title=title, kws=", ".join(filtered_summary_kws), examples=ex)}
                 ],
                 temperature=0.3,
-                max_tokens=100,  # Reduced for speed
-                timeout=30  # Reduced timeout
+                max_tokens=100,
+                timeout=60  # Increased timeout to handle rate limits better
             )
             s = (resp.choices[0].message.content or "").strip()
             return tid, s or base_summary
@@ -1023,17 +1031,17 @@ def compute_themes_payload(
         from concurrent.futures import ThreadPoolExecutor, as_completed
         print(f"[Theme Generation] Generating {total_themes} professional theme names in parallel...", file=sys.stderr)
 
-        # Parallel name generation (batch of 12)
-        with ThreadPoolExecutor(max_workers=12) as executor:
+        # Parallel name generation (reduced workers to avoid OpenAI rate limits)
+        with ThreadPoolExecutor(max_workers=6) as executor:
             name_futures = {executor.submit(process_theme_name, td): td for td in theme_data_list}
             for future in as_completed(name_futures):
                 tid, title = future.result()
                 theme_names[tid] = title
                 print(f"[Theme Generation] ✓ Generated name for theme {tid}: {title}", file=sys.stderr)
 
-        # Parallel summary generation (batch of 12)
+        # Parallel summary generation (reduced workers to avoid OpenAI rate limits)
         print(f"[Theme Generation] Generating {total_themes} theme summaries in parallel...", file=sys.stderr)
-        with ThreadPoolExecutor(max_workers=12) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             summary_futures = {executor.submit(process_theme_summary, td, theme_names[td['tid']]): td for td in theme_data_list}
             for future in as_completed(summary_futures):
                 tid, summary = future.result()

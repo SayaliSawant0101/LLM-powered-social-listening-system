@@ -7,9 +7,14 @@ import { spawn } from "child_process";
 import duckdb from "duckdb";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
+import dotenv from "dotenv";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load .env file from project root
+const projectRoot = path.join(__dirname, "..");
+dotenv.config({ path: path.join(projectRoot, ".env") });
 
 // 👇 points to the existing root-level data folder
 const DATA_DIR = path.join(__dirname, "../data");
@@ -242,10 +247,21 @@ app.get("/api/themes", async (req, res) => {
     if (start) args.push("--start-date", start);
     if (end) args.push("--end-date", end);
     
-    // Get OpenAI key from env if available
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (openaiKey) {
-      args.push("--openai-key", openaiKey);
+    // Fast mode: skip OpenAI if requested (for faster generation)
+    const fastMode = req.query.fast_mode === 'true';
+    if (fastMode) {
+      args.push("--fast-mode");
+      console.log(`[Themes API] ⚡ Fast mode enabled - skipping OpenAI calls for faster generation`);
+    } else {
+      // Get OpenAI key from env if available
+      const openaiKey = process.env.OPENAI_API_KEY;
+      if (openaiKey && openaiKey.trim().length > 0) {
+        args.push("--openai-key", openaiKey);
+        console.log(`[Themes API] ✅ OpenAI key found (length: ${openaiKey.length}) - will generate professional theme names`);
+      } else {
+        console.warn(`[Themes API] ⚠️  OpenAI key NOT found in environment. Theme names will be keyword-based.`);
+        console.warn(`[Themes API] 💡 Set OPENAI_API_KEY in .env file or environment variables to enable AI-powered theme names.`);
+      }
     }
     
     // Determine Python command (python3 on Unix, python on Windows)
@@ -359,17 +375,17 @@ app.get("/api/themes", async (req, res) => {
       }
     });
     
-    // Set timeout to prevent hanging (10 minutes for theme generation with 12 themes + OpenAI)
+    // Set timeout to prevent hanging (20 minutes for theme generation with 15k tweets + 15 themes + OpenAI)
     setTimeout(() => {
       if (!res.headersSent) {
         pythonProcess.kill();
         res.status(504).json({ 
           error: "Theme generation timeout",
-          details: "Theme generation exceeded 10 minutes. This may happen with large datasets or when generating many themes.",
-          hint: "Try reducing the number of themes or the date range."
+          details: "Theme generation exceeded 20 minutes. This may happen with very large datasets or when generating many themes.",
+          hint: "Try reducing the number of themes, the date range, or the max_rows parameter."
         });
       }
-    }, 10 * 60 * 1000); // 10 minutes for 12 themes with OpenAI
+    }, 20 * 60 * 1000); // 20 minutes for 15k tweets + 15 themes with OpenAI
     
   } catch (e) {
     console.error(e);
@@ -1567,9 +1583,10 @@ app.get("/api/reports/themes", async (req, res) => {
     const start = req.query.start;
     const end = req.query.end;
     const format = req.query.format || 'pdf';
+    const n_clusters = req.query.n_clusters ? parseInt(req.query.n_clusters) : 12;
     const whereClause = buildWhereClause(start, end);
 
-    // Get themes directly from parquet - use same query as /api/themes
+    // Get theme counts from parquet
     const themesSql = `
       SELECT theme::INTEGER AS id, COUNT(*)::INTEGER AS tweet_count
       FROM read_parquet('${THEMES_PARQUET.replace(/\\/g, "/")}')
@@ -1582,15 +1599,44 @@ app.get("/api/reports/themes", async (req, res) => {
       conn.all(themesSql, (err, r) => (err ? reject(err) : resolve(r)))
     );
 
-    // Get theme names and summaries if available
-    const names = exists(THEME_NAMES) ? JSON.parse(fs.readFileSync(THEME_NAMES, "utf8")) : {};
-    const sums = exists(THEME_SUMMARIES) ? JSON.parse(fs.readFileSync(THEME_SUMMARIES, "utf8")) : {};
+    // Get theme names and summaries from dynamically generated files (if available)
+    // These files are generated when themes are created via /api/themes endpoint
+    // Fallback to generic names if files don't exist (for cloud deployment compatibility)
+    let themeData = {};
+    
+    // Try to read from dynamically generated files (if they exist)
+    if (exists(THEME_NAMES) && exists(THEME_SUMMARIES)) {
+      try {
+        const names = JSON.parse(fs.readFileSync(THEME_NAMES, "utf8"));
+        const sums = JSON.parse(fs.readFileSync(THEME_SUMMARIES, "utf8"));
+        
+        themeRows.forEach(row => {
+          themeData[row.id] = {
+            name: names[row.id] || `Theme ${row.id || 0}`,
+            summary: sums[row.id] || `Analysis of ${row.tweet_count} tweets in this theme`
+          };
+        });
+      } catch (error) {
+        console.warn(`[Theme Report] Failed to read theme files: ${error.message}. Using generic names.`);
+      }
+    }
+    
+    // Fallback: Use generic names if files don't exist (cloud deployment scenario)
+    // Files are generated automatically when users generate themes via UI
+    themeRows.forEach(row => {
+      if (!themeData[row.id]) {
+        themeData[row.id] = {
+          name: `Theme ${row.id || 0}`,
+          summary: `Analysis of ${row.tweet_count} tweets in this theme`
+        };
+      }
+    });
     
     const themes = themeRows.map(row => ({
       id: row.id || 0,
-      name: names[row.id] || `Theme ${row.id || 0}`,
+      name: themeData[row.id]?.name || `Theme ${row.id || 0}`,
       tweet_count: Number(row.tweet_count) || 0,
-      summary: sums[row.id] || `Analysis of ${row.tweet_count} tweets in this theme`
+      summary: themeData[row.id]?.summary || `Analysis of ${row.tweet_count} tweets in this theme`
     }));
 
     if (format === 'pdf') {

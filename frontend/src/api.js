@@ -13,7 +13,7 @@ const API = axios.create({
 // Special API instance for long-running operations like theme generation
 const LONG_API = axios.create({
   baseURL: BASE_URL,
-  timeout: 600000, // 10 minutes for theme generation (12 themes with OpenAI can take time)
+  timeout: 1200000, // 20 minutes for theme generation (15k tweets + 15 themes + OpenAI can take 15-20 minutes)
 });
 
 // --- Sentiment ---

@@ -12,7 +12,8 @@ dist/
 .build/
 .next/
 .out/
-*.parquet
+# Allow data/ folder files to be tracked (uncomment to ignore parquet files globally)
+# *.parquet
 *.csv
 *.feather
 *.arrow

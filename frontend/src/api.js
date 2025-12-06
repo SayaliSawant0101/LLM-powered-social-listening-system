@@ -13,6 +13,9 @@ const RAW_BASE_URL =
 // Remove any trailing slash just to be safe
 const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
 
+// 🔍 DEBUG: see what the frontend is actually using in the browser
+console.log("🛰 API BASE_URL =", BASE_URL);
+
 // Main API instance
 const API = axios.create({
   baseURL: BASE_URL,
@@ -84,7 +87,7 @@ export async function getAspectSentimentSplit(
   return data;
 }
 
-// Get raw aspect data for calculating "Others" category
+// Raw aspect data for "Others" calculations
 export async function getRawAspectData(start, end) {
   const { data } = await API.get("/api/aspects/sentiment-split", {
     params: { start, end, as_percent: false },
@@ -92,7 +95,7 @@ export async function getRawAspectData(start, end) {
   return data;
 }
 
-// Get sample tweets for specific aspect and sentiment
+// Sample tweets for specific aspect/sentiment
 export async function getSampleTweets(
   start,
   end,
@@ -110,7 +113,7 @@ export async function getSampleTweets(
 export async function fetchThemes({
   start = null,
   end = null,
-  n_clusters = null, // Auto-detect if null
+  n_clusters = null,
   emb_model = "sentence-transformers/all-MiniLM-L6-v2",
   parquet = null,
   max_rows = null,
@@ -126,7 +129,7 @@ export async function fetchThemes({
   }
 
   const { data } = await LONG_API.get("/api/themes", { params });
-  return data; // { updated_at, themes: [{id, name, summary, tweet_count}] }
+  return data;
 }
 
 // --- Raw Data Downloads ---
@@ -226,10 +229,8 @@ export async function downloadThemeTweetsReport(themeId, start, end) {
   const blob = new Blob([response.data], { type: "text/html" });
   const url = window.URL.createObjectURL(blob);
 
-  // Open in new tab instead of downloading
   window.open(url, "_blank");
 
-  // Clean up the URL after a delay to free memory
   setTimeout(() => {
     window.URL.revokeObjectURL(url);
   }, 10000);

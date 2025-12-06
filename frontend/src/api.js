@@ -1,36 +1,44 @@
 // frontend/src/api.js
 import axios from "axios";
 
-// Prefer env if provided; otherwise fall back to localhost
-const BASE_URL = import.meta?.env?.VITE_API_BASE || "http://localhost:3001";
+// ✅ Use VITE_API_BASE_URL in all environments, fallback to localhost for dev
+const BASE_URL =
+  import.meta?.env?.VITE_API_BASE_URL || "http://localhost:3001";
 
-// If you set up a Vite proxy, change baseURL to "/api"
+// Main API instance
 const API = axios.create({
-  baseURL: BASE_URL, // or "http://localhost:3001"
+  baseURL: BASE_URL,
   timeout: 15000,
 });
 
 // Special API instance for long-running operations like theme generation
 const LONG_API = axios.create({
   baseURL: BASE_URL,
-  timeout: 1200000, // 20 minutes for theme generation (15k tweets + 15 themes + OpenAI can take 15-20 minutes)
+  timeout: 1200000, // 20 minutes for theme generation
 });
 
 // --- Sentiment ---
 export async function getMeta() {
   const { data } = await API.get("/");
-  // prefer aspect range if needed, but keep existing behavior
   return data?.date_range || null;
 }
 
 export async function getSummary(start, end) {
-  const { data } = await API.get("/api/sentiment/summary", { params: { start, end } });
+  const { data } = await API.get("/api/sentiment/summary", {
+    params: { start, end },
+  });
   return data;
 }
 
-export async function getTrend(start, end, period = "daily", offset = 0, limit = 0) {
-  const { data } = await API.get("/api/sentiment/trend", { 
-    params: { start, end, period, offset, limit } 
+export async function getTrend(
+  start,
+  end,
+  period = "daily",
+  offset = 0,
+  limit = 0
+) {
+  const { data } = await API.get("/api/sentiment/trend", {
+    params: { start, end, period, offset, limit },
   });
   return data;
 }
@@ -44,14 +52,26 @@ export async function getAspectSummary(start, end, asPercent = false) {
 }
 
 export async function getAspectAvgScores(start, end) {
-  const { data } = await API.get("/api/aspects/avg-scores", { params: { start, end } });
+  const { data } = await API.get("/api/aspects/avg-scores", {
+    params: { start, end },
+  });
   return data;
 }
 
 // --- Aspect × Sentiment (Stacked Bar) ---
-export async function getAspectSentimentSplit(start, end, asPercent = false, includeOthers = false) {
+export async function getAspectSentimentSplit(
+  start,
+  end,
+  asPercent = false,
+  includeOthers = false
+) {
   const { data } = await API.get("/api/aspects/sentiment-split", {
-    params: { start, end, as_percent: asPercent, include_others: includeOthers },
+    params: {
+      start,
+      end,
+      as_percent: asPercent,
+      include_others: includeOthers,
+    },
   });
   return data;
 }
@@ -59,15 +79,21 @@ export async function getAspectSentimentSplit(start, end, asPercent = false, inc
 // Get raw aspect data for calculating "Others" category
 export async function getRawAspectData(start, end) {
   const { data } = await API.get("/api/aspects/sentiment-split", {
-    params: { start, end, as_percent: false }
+    params: { start, end, as_percent: false },
   });
   return data;
 }
 
 // Get sample tweets for specific aspect and sentiment
-export async function getSampleTweets(start, end, aspect, sentiment, limit = 10) {
+export async function getSampleTweets(
+  start,
+  end,
+  aspect,
+  sentiment,
+  limit = 10
+) {
   const { data } = await API.get("/api/tweets/sample", {
-    params: { start, end, aspect, sentiment, limit }
+    params: { start, end, aspect, sentiment, limit },
   });
   return data.tweets || [];
 }
@@ -81,7 +107,6 @@ export async function fetchThemes({
   parquet = null,
   max_rows = null,
 } = {}) {
-  // Build params without null/empty values
   const params = {};
   if (start) params.start = start;
   if (end) params.end = end;
@@ -97,15 +122,15 @@ export async function fetchThemes({
 }
 
 // --- Raw Data Downloads ---
-export async function downloadRawTweets(start, end, format = 'csv') {
+export async function downloadRawTweets(start, end, format = "csv") {
   const response = await API.get("/api/tweets/raw", {
     params: { start, end, format },
-    responseType: 'blob'
+    responseType: "blob",
   });
-  
+
   const blob = new Blob([response.data]);
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = url;
   link.download = `raw_tweets_${start}_to_${end}.${format}`;
   document.body.appendChild(link);
@@ -114,15 +139,15 @@ export async function downloadRawTweets(start, end, format = 'csv') {
   window.URL.revokeObjectURL(url);
 }
 
-export async function downloadSentimentReport(start, end, format = 'pdf') {
+export async function downloadSentimentReport(start, end, format = "pdf") {
   const response = await API.get("/api/reports/sentiment", {
     params: { start, end, format },
-    responseType: 'blob'
+    responseType: "blob",
   });
-  
+
   const blob = new Blob([response.data]);
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = url;
   link.download = `sentiment_report_${start}_to_${end}.${format}`;
   document.body.appendChild(link);
@@ -131,15 +156,15 @@ export async function downloadSentimentReport(start, end, format = 'pdf') {
   window.URL.revokeObjectURL(url);
 }
 
-export async function downloadAspectReport(start, end, format = 'pdf') {
+export async function downloadAspectReport(start, end, format = "pdf") {
   const response = await API.get("/api/reports/aspects", {
     params: { start, end, format },
-    responseType: 'blob'
+    responseType: "blob",
   });
-  
+
   const blob = new Blob([response.data]);
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = url;
   link.download = `aspect_report_${start}_to_${end}.${format}`;
   document.body.appendChild(link);
@@ -148,15 +173,15 @@ export async function downloadAspectReport(start, end, format = 'pdf') {
   window.URL.revokeObjectURL(url);
 }
 
-export async function downloadThemeReport(start, end, format = 'pdf') {
+export async function downloadThemeReport(start, end, format = "pdf") {
   const response = await API.get("/api/reports/themes", {
     params: { start, end, format },
-    responseType: 'blob'
+    responseType: "blob",
   });
-  
+
   const blob = new Blob([response.data]);
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = url;
   link.download = `theme_report_${start}_to_${end}.${format}`;
   document.body.appendChild(link);
@@ -165,17 +190,19 @@ export async function downloadThemeReport(start, end, format = 'pdf') {
   window.URL.revokeObjectURL(url);
 }
 
-export async function downloadDashboardReport(start, end, format = 'pdf') {
+export async function downloadDashboardReport(start, end, format = "pdf") {
   const response = await API.get("/api/reports/dashboard", {
     params: { start, end, format },
-    responseType: 'blob'
+    responseType: "blob",
   });
 
   const blob = new Blob([response.data]);
   const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
+  const link = document.createElement("a");
   link.href = url;
-  link.download = `analytics_dashboard_${start || 'all'}_to_${end || 'all'}.${format}`;
+  link.download = `analytics_dashboard_${start || "all"}_to_${
+    end || "all"
+  }.${format}`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -185,17 +212,15 @@ export async function downloadDashboardReport(start, end, format = 'pdf') {
 export async function downloadThemeTweetsReport(themeId, start, end) {
   const response = await API.get(`/api/reports/theme/${themeId}`, {
     params: { start, end, limit: 200 },
-    responseType: 'blob'
+    responseType: "blob",
   });
-  
-  const blob = new Blob([response.data], { type: 'text/html' });
+
+  const blob = new Blob([response.data], { type: "text/html" });
   const url = window.URL.createObjectURL(blob);
-  
-  // Open in new tab instead of downloading
-  const newWindow = window.open(url, '_blank');
-  
-  // Clean up the URL after a delay to free memory
+
+  const newWindow = window.open(url, "_blank");
+
   setTimeout(() => {
     window.URL.revokeObjectURL(url);
-  }, 10000); // 10 seconds delay
+  }, 10000);
 }

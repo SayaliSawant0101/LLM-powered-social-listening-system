@@ -1,9 +1,17 @@
 // frontend/src/api.js
 import axios from "axios";
 
-// ✅ Use VITE_API_BASE_URL in all environments, fallback to localhost for dev
-const BASE_URL =
+// ----------------------------------------
+// Base URL configuration
+// ----------------------------------------
+// In production (Netlify), we set VITE_API_BASE_URL to the Railway URL.
+// In local dev, you can either set VITE_API_BASE_URL in .env
+// or it will fall back to http://localhost:3001.
+const RAW_BASE_URL =
   import.meta?.env?.VITE_API_BASE_URL || "http://localhost:3001";
+
+// Remove any trailing slash just to be safe
+const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
 
 // Main API instance
 const API = axios.create({
@@ -218,8 +226,10 @@ export async function downloadThemeTweetsReport(themeId, start, end) {
   const blob = new Blob([response.data], { type: "text/html" });
   const url = window.URL.createObjectURL(blob);
 
-  const newWindow = window.open(url, "_blank");
+  // Open in new tab instead of downloading
+  window.open(url, "_blank");
 
+  // Clean up the URL after a delay to free memory
   setTimeout(() => {
     window.URL.revokeObjectURL(url);
   }, 10000);

@@ -4,16 +4,27 @@ import axios from "axios";
 // ----------------------------------------
 // Base URL configuration
 // ----------------------------------------
-// In production (Netlify), we set VITE_API_BASE_URL to the Railway URL.
-// In local dev, you can either set VITE_API_BASE_URL in .env
-// or it will fall back to http://localhost:3001.
+
+// Your Railway production URL
+const RAILWAY_URL =
+  "https://llm-powered-social-listening-system-production.up.railway.app";
+
+// Detect if we're running on Netlify (production)
+const isNetlifyProd = typeof window !== "undefined" &&
+  window.location.hostname.endsWith("netlify.app");
+
+// Choose BASE_URL:
+// 1) Prefer env variable (Vite / Netlify)
+// 2) If on Netlify and env is missing, fall back to Railway URL
+// 3) Otherwise (local dev), fall back to localhost
 const RAW_BASE_URL =
-  import.meta?.env?.VITE_API_BASE_URL || "http://localhost:3001";
+  import.meta?.env?.VITE_API_BASE_URL ||
+  (isNetlifyProd ? RAILWAY_URL : "http://localhost:3001");
 
 // Remove any trailing slash just to be safe
 const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
 
-// 🔍 DEBUG: see what the frontend is actually using in the browser
+// Debug: confirm what the app is actually using
 console.log("🛰 API BASE_URL =", BASE_URL);
 
 // Main API instance
@@ -87,7 +98,7 @@ export async function getAspectSentimentSplit(
   return data;
 }
 
-// Raw aspect data for "Others" calculations
+// Get raw aspect data for calculating "Others" category
 export async function getRawAspectData(start, end) {
   const { data } = await API.get("/api/aspects/sentiment-split", {
     params: { start, end, as_percent: false },
@@ -95,7 +106,7 @@ export async function getRawAspectData(start, end) {
   return data;
 }
 
-// Sample tweets for specific aspect/sentiment
+// Get sample tweets for specific aspect and sentiment
 export async function getSampleTweets(
   start,
   end,
@@ -113,7 +124,7 @@ export async function getSampleTweets(
 export async function fetchThemes({
   start = null,
   end = null,
-  n_clusters = null,
+  n_clusters = null, // Auto-detect if null
   emb_model = "sentence-transformers/all-MiniLM-L6-v2",
   parquet = null,
   max_rows = null,
@@ -129,7 +140,7 @@ export async function fetchThemes({
   }
 
   const { data } = await LONG_API.get("/api/themes", { params });
-  return data;
+  return data; // { updated_at, themes: [{id, name, summary, tweet_count}] }
 }
 
 // --- Raw Data Downloads ---
@@ -229,8 +240,10 @@ export async function downloadThemeTweetsReport(themeId, start, end) {
   const blob = new Blob([response.data], { type: "text/html" });
   const url = window.URL.createObjectURL(blob);
 
+  // Open in new tab instead of downloading
   window.open(url, "_blank");
 
+  // Clean up the URL after a delay to free memory
   setTimeout(() => {
     window.URL.revokeObjectURL(url);
   }, 10000);

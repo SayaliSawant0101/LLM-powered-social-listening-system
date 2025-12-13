@@ -241,6 +241,10 @@ if os.path.exists(ASPECT_PATH):
     adf = pd.read_parquet(ASPECT_PATH)
     _asp_date_col = _detect_date_col(adf)
     adf = _normalize_dates(adf, _asp_date_col)
+    adf["aspect_dominant"] = (
+    adf["aspect_dominant"]
+      .astype(str).str.strip().str.lower()
+      .replace({"app_ux": "app/ux"}))
     ASPECT_MIN_DATE = adf["date_only"].min()
     ASPECT_MAX_DATE = adf["date_only"].max()
 else:

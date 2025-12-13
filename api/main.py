@@ -42,15 +42,8 @@ app = FastAPI(title="Walmart Social Listener API")
 # Allow calls from Vite dev server + Netlify (prod + previews)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "https://socialmedialistener.netlify.app",  # ✅ your Netlify production site
-    ],
-    allow_origin_regex=r"https://.*\.netlify\.app",  # ✅ allows Netlify deploy previews
-    allow_credentials=True,
+    allow_origins=["*"],          
+    allow_credentials=False,      
     allow_methods=["*"],
     allow_headers=["*"],
 )

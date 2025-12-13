@@ -3,15 +3,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from dotenv import load_dotenv
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from datetime import date, datetime
+
+from datetime import date
 from typing import Optional, Tuple
+
 import pandas as pd
 import traceback
 import os
-import json
 from io import StringIO, BytesIO
 
 # LLM summaries (exec summary + structured brief)
@@ -30,26 +32,26 @@ def _read_openai_key() -> str:
     return key.strip().strip('"').strip("'")
 
 
-# Load raw tweets data for theme generation
+# ------------ Paths ------------
 RAW_TWEETS_PATH = "data/tweets_stage0_raw.parquet"
 
-# ------------ Paths ------------
 SENTI_PATH = "data/tweets_stage1_sentiment.parquet"
 ASPECT_PATH = "data/tweets_stage2_aspects.parquet"
+
 STAGE3_PATH = "data/tweets_stage3_aspect_sentiment.parquet"  # optional cache (no dates)
 STAGE3_THEMES_PARQUET = "data/tweets_stage3_themes.parquet"  # written by /themes
 
+
 app = FastAPI(title="Walmart Social Listener API")
 
+
 # ------------------------------------------------------------
-# Helper: register BOTH routes:
-#   /xyz   and   /api/xyz
+# IMPORTANT:
+# Frontend calls /api/..., but many routes are /sentiment/... etc.
+# This helper registers BOTH:
+#   /xyz    and   /api/xyz
 # ------------------------------------------------------------
 def _alias(route_path: str):
-    """
-    Decorator to register the same endpoint under two paths:
-      /xyz   and   /api/xyz
-    """
     def decorator(func):
         app.get(route_path)(func)
         app.get("/api" + route_path)(func)
@@ -57,30 +59,21 @@ def _alias(route_path: str):
     return decorator
 
 
-# ------------------------------------------------------------
-# ✅ CORS FIX (Netlify + local dev)
-#   - allow_origin_regex handles Netlify previews + prod
-#   - allow_credentials=True prevents browser "Failed to fetch" when credentials/headers are present
-# ------------------------------------------------------------
+# Allow calls from Vite dev server + Netlify (prod + previews)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://localhost:3001",
-    ],
-    allow_origin_regex=r"https://.*\.netlify\.app",
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ------------ Helpers ------------
 def _detect_date_col(df: pd.DataFrame) -> str:
-    for c in ["createdat", "created_dt", "created_at", "date"]:
+    for c in ["createdat", "created_dt", "created_at", "tweet_date", "date", "dt", "timestamp"]:
         if c in df.columns:
             return c
-    raise KeyError("No createdat/date column found in parquet.")
+    raise KeyError("No created/date column found in parquet.")
 
 
 def _normalize_dates(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
@@ -98,7 +91,7 @@ def _sentiment_summary(sub: pd.DataFrame) -> dict:
     for k in ["positive", "neutral", "negative"]:
         counts.setdefault(k, 0)
         pct.setdefault(k, 0.0)
-    return {"total": total, "counts": counts, "percent": pct}
+    return {"total": int(sum(counts.values())), "counts": counts, "percent": pct}
 
 
 def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str], include_others: bool = False) -> dict:
@@ -128,17 +121,17 @@ def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str], include_oth
         if col not in pivot.columns:
             pivot[col] = 0
 
-    predefined_pivot = pivot.reindex(aspects, fill_value=0)
+    predefined = pivot.reindex(aspects, fill_value=0)
 
     labels = aspects.copy()
     counts = {
-        "positive": [int(x) for x in predefined_pivot["positive"].tolist()],
-        "neutral":  [int(x) for x in predefined_pivot["neutral"].tolist()],
-        "negative": [int(x) for x in predefined_pivot["negative"].tolist()],
+        "positive": [int(x) for x in predefined["positive"].tolist()],
+        "neutral":  [int(x) for x in predefined["neutral"].tolist()],
+        "negative": [int(x) for x in predefined["negative"].tolist()],
     }
 
-    totals = (predefined_pivot[["positive", "neutral", "negative"]].sum(axis=1).replace(0, 1))
-    pct_df = (predefined_pivot[["positive", "neutral", "negative"]].div(totals, axis=0) * 100).round(2)
+    totals = (predefined[["positive", "neutral", "negative"]].sum(axis=1).replace(0, 1))
+    pct_df = (predefined[["positive", "neutral", "negative"]].div(totals, axis=0) * 100).round(2)
     percent = {
         "positive": [float(x) for x in pct_df["positive"].tolist()],
         "neutral":  [float(x) for x in pct_df["neutral"].tolist()],
@@ -146,15 +139,16 @@ def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str], include_oth
     }
 
     if include_others:
-        all_aspects = sub["aspect_dominant"].unique()
+        all_aspects = sub["aspect_dominant"].astype(str).unique()
         other_aspects = [a for a in all_aspects if a not in aspects]
+
         labels.append("others")
         if other_aspects:
-            others_data = sub[sub["aspect_dominant"].isin(other_aspects)]
-            others_counts = others_data.groupby("sentiment_label").size()
-            pos = int(others_counts.get("positive", 0))
-            neu = int(others_counts.get("neutral", 0))
-            neg = int(others_counts.get("negative", 0))
+            others = sub[sub["aspect_dominant"].astype(str).isin(other_aspects)]
+            oc = others.groupby("sentiment_label").size()
+            pos = int(oc.get("positive", 0))
+            neu = int(oc.get("neutral", 0))
+            neg = int(oc.get("negative", 0))
             counts["positive"].append(pos)
             counts["neutral"].append(neu)
             counts["negative"].append(neg)
@@ -179,29 +173,54 @@ def _aspect_split_from_subset(sub: pd.DataFrame, aspects: list[str], include_oth
 
 
 def _pick_any_date_col(df: pd.DataFrame) -> Optional[str]:
-    for c in ["createdat", "created_dt", "created_at", "tweet_date", "date", "dt"]:
+    for c in ["createdat", "created_dt", "created_at", "tweet_date", "date", "dt", "timestamp"]:
         if c in df.columns:
             return c
     return None
 
 
-def _parse_date_str(s: str) -> str:
+def _ensure_llm_columns(df_in: pd.DataFrame) -> pd.DataFrame:
     """
-    Accepts:
-      - YYYY-MM-DD
-      - MM/DD/YYYY
-    Returns ISO string YYYY-MM-DD.
+    summarize_tweets() typically needs:
+      - date column named 'date'
+      - a text column (we force 'text')
+      - sentiment_label (best-effort)
+    This makes the endpoint resilient to column-name differences across datasets.
     """
-    s = (s or "").strip()
-    if not s:
-        return s
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            pass
-    # if already something else, return as-is (build_executive_summary may handle)
-    return s
+    df_out = df_in.copy()
+
+    # --- Ensure date column named 'date' ---
+    if "date" not in df_out.columns:
+        # Prefer date_only if present, else try detect any date-ish column
+        if "date_only" in df_out.columns:
+            df_out["date"] = df_out["date_only"]
+        else:
+            dcol = _pick_any_date_col(df_out)
+            df_out["date"] = df_out[dcol] if dcol else pd.NaT
+
+    df_out["date"] = pd.to_datetime(df_out["date"], errors="coerce")
+
+    # --- Ensure text column named 'text' ---
+    text_candidates = ["text", "text_used", "clean_tweet", "text_clean", "fulltext", "tweet_text", "content"]
+    if "text" not in df_out.columns:
+        picked = None
+        for c in text_candidates:
+            if c in df_out.columns:
+                picked = c
+                break
+        if picked is not None:
+            df_out["text"] = df_out[picked].astype(str)
+        else:
+            df_out["text"] = ""
+
+    # --- Ensure sentiment_label exists ---
+    if "sentiment_label" not in df_out.columns:
+        df_out["sentiment_label"] = "neutral"
+
+    # Clean empties
+    df_out["text"] = df_out["text"].fillna("").astype(str)
+
+    return df_out
 
 
 # ------------ Load Sentiment (Stage 1) ------------
@@ -211,6 +230,7 @@ if not os.path.exists(SENTI_PATH):
 df = pd.read_parquet(SENTI_PATH)
 _sent_date_col = _detect_date_col(df)
 df = _normalize_dates(df, _sent_date_col)
+
 SENT_MIN_DATE = df["date_only"].min()
 SENT_MAX_DATE = df["date_only"].max()
 
@@ -238,13 +258,12 @@ if os.path.exists(STAGE3_PATH):
     except Exception:
         stage3_df = None
 
-# ---------- Simple in-process cache for /themes ----------
+# In-process cache for /themes
 _THEMES_CACHE: dict[Tuple[Optional[str], Optional[str], int, str], dict] = {}
 
-# ------------ Routes ------------
 
+# ------------ Routes ------------
 @app.get("/")
-@app.get("/api")
 @app.get("/api/")
 def health():
     return {
@@ -280,10 +299,12 @@ def sentiment_summary(
 def sentiment_trend(
     start: date = Query(default=SENT_MIN_DATE),
     end: date = Query(default=SENT_MAX_DATE),
-    period: str = Query(default="daily"),
-    offset: int = Query(default=0),
-    limit: int = Query(default=0),
+    period: str = Query(default="daily"),  # accepted
+    offset: int = Query(default=0),        # accepted
+    limit: int = Query(default=0),         # accepted
 ):
+    _ = period, offset, limit  # unused, but prevents 422 if frontend passes them
+
     mask = (df["date_only"] >= start) & (df["date_only"] <= end)
     sub = df.loc[mask]
     if sub.empty:
@@ -334,7 +355,6 @@ def aspects_summary(
 
     mask = (adf["date_only"] >= s) & (adf["date_only"] <= e)
     sub = adf.loc[mask]
-
     if sub.empty:
         counts = {a: 0 for a in ASPECTS}
         pct = {a: 0.0 for a in ASPECTS}
@@ -387,9 +407,12 @@ def aspects_avg_scores(
 def aspects_sentiment_split(
     start: date = Query(default=None),
     end: date = Query(default=None),
-    as_percent: bool = Query(default=False),
+    as_percent: bool = Query(default=False),     # accepted, payload includes both counts & percent anyway
     include_others: bool = Query(default=False),
 ):
+    _ = as_percent  # not needed (payload already contains percent arrays)
+
+    # Use cached Stage3 if no dates passed
     if start is None and end is None and stage3_df is not None:
         s3 = stage3_df.set_index("aspect_dominant").reindex(ASPECTS, fill_value=0)
         for c in ["positive", "neutral", "negative"]:
@@ -411,23 +434,21 @@ def aspects_sentiment_split(
         }
 
         if include_others:
-            all_aspects = stage3_df["aspect_dominant"].unique()
+            all_aspects = stage3_df["aspect_dominant"].astype(str).unique()
             other_aspects = [a for a in all_aspects if a not in ASPECTS]
             labels.append("others")
             if other_aspects:
-                others_data = stage3_df[stage3_df["aspect_dominant"].isin(other_aspects)]
-                others_counts = others_data[["positive", "neutral", "negative"]].sum()
-                pos = int(others_counts.get("positive", 0))
-                neu = int(others_counts.get("neutral", 0))
-                neg = int(others_counts.get("negative", 0))
+                others_data = stage3_df[stage3_df["aspect_dominant"].astype(str).isin(other_aspects)]
+                oc = others_data[["positive", "neutral", "negative"]].sum()
+                pos, neu, neg = int(oc.get("positive", 0)), int(oc.get("neutral", 0)), int(oc.get("negative", 0))
                 counts["positive"].append(pos)
                 counts["neutral"].append(neu)
                 counts["negative"].append(neg)
-                ot_total = pos + neu + neg
-                if ot_total > 0:
-                    percent["positive"].append(round(pos / ot_total * 100, 2))
-                    percent["neutral"].append(round(neu / ot_total * 100, 2))
-                    percent["negative"].append(round(neg / ot_total * 100, 2))
+                ot = pos + neu + neg
+                if ot > 0:
+                    percent["positive"].append(round(pos / ot * 100, 2))
+                    percent["neutral"].append(round(neu / ot * 100, 2))
+                    percent["negative"].append(round(neg / ot * 100, 2))
                 else:
                     percent["positive"].append(0.0)
                     percent["neutral"].append(0.0)
@@ -452,22 +473,19 @@ def aspects_sentiment_split(
     return _aspect_split_from_subset(sub, ASPECTS, include_others)
 
 
-# --- Executive summary (LLM-powered) ---
+# --- Executive summary (LLM-powered with fallback) ---
 @_alias("/executive-summary")
 def executive_summary(
-    start: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
-    end: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     sample_per_sentiment: int = Query(default=250, ge=50, le=500),
 ):
     try:
-        start_iso = _parse_date_str(start)
-        end_iso = _parse_date_str(end)
-
         result = build_executive_summary(
             df_senti=df,
             df_aspects=adf,
-            start=start_iso,
-            end=end_iso,
+            start=start,
+            end=end,
             openai_api_key=_read_openai_key(),
             sample_per_sentiment=sample_per_sentiment,
         )
@@ -476,48 +494,30 @@ def executive_summary(
         tb = traceback.format_exc()
         return JSONResponse(
             status_code=500,
-            content={"error": str(e), "trace_tail": tb.splitlines()[-6:]},
+            content={"error": str(e), "trace_tail": tb.splitlines()[-10:]},
         )
 
 
 # --- Structured brief ---
 @_alias("/structured-brief")
 def structured_brief(
-    start: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
-    end: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     keyword: Optional[str] = Query(default=None),
-    sample_size: int = Query(default=50, ge=20, le=200),
+    sample_size: int = Query(default=80, ge=20, le=200),
 ):
+    """
+    This endpoint was throwing 500 in your UI.
+    Most common cause: summarize_tweets() expects certain columns (date/text).
+    We enforce them here.
+    """
     try:
-        start_iso = _parse_date_str(start)
-        end_iso = _parse_date_str(end)
-
-        df_for_llm = df.copy()
-
-        if "date" in df_for_llm.columns:
-            pass
-        elif "date_only" in df_for_llm.columns:
-            df_for_llm["date"] = df_for_llm["date_only"]
-        elif "created_at" in df_for_llm.columns:
-            df_for_llm["date"] = df_for_llm["created_at"]
-        elif "timestamp" in df_for_llm.columns:
-            df_for_llm["date"] = df_for_llm["timestamp"]
-        else:
-            maybe = [c for c in df_for_llm.columns if "date" in c or "time" in c]
-            df_for_llm["date"] = df_for_llm[maybe[0]] if maybe else pd.NaT
-
-        if (df_for_llm.columns == "date").sum() > 1:
-            first_idx = [i for i, c in enumerate(df_for_llm.columns) if c == "date"][0]
-            keep = list(range(len(df_for_llm.columns)))
-            for i, c in enumerate(df_for_llm.columns):
-                if c == "date" and i != first_idx:
-                    keep.remove(i)
-            df_for_llm = df_for_llm.iloc[:, keep]
+        df_for_llm = _ensure_llm_columns(df)
 
         res = summarize_tweets(
             df=df_for_llm,
-            start_date=start_iso,
-            end_date=end_iso,
+            start_date=start,
+            end_date=end,
             keyword=keyword,
             sample_size=sample_size,
         )
@@ -526,37 +526,40 @@ def structured_brief(
         tb = traceback.format_exc()
         return JSONResponse(
             status_code=500,
-            content={"error": str(e), "trace_tail": tb.splitlines()[-6:]},
+            content={
+                "error": str(e),
+                "hint": "Structured brief failed. Check that Stage1 parquet has a usable text column and date column. This endpoint now auto-maps columns.",
+                "trace_tail": tb.splitlines()[-10:],
+            },
         )
 
 
 # --- Themes (dynamic clustering + summaries) ---
 @_alias("/themes")
 def themes(
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
     n_clusters: Optional[int] = Query(default=None, ge=1, le=8),
     emb_model: str = Query(default="sentence-transformers/all-MiniLM-L6-v2"),
     merge_similar: bool = Query(default=True),
-    parquet: Optional[str] = Query(default=None),
-    max_rows: Optional[int] = Query(default=None),
+    parquet: Optional[str] = Query(default=None),   # accepted
+    max_rows: Optional[int] = Query(default=None),  # accepted
 ):
-    key = (start, end, n_clusters or 0, emb_model)
+    _ = emb_model, merge_similar  # (your compute_themes_payload currently ignores these)
+
+    key = (start, end, int(n_clusters or 0), "default")
     if key in _THEMES_CACHE:
         del _THEMES_CACHE[key]
 
     try:
-        start_iso = _parse_date_str(start) if start else None
-        end_iso = _parse_date_str(end) if end else None
-
         df_raw = pd.read_parquet(parquet or RAW_TWEETS_PATH)
         if isinstance(max_rows, int) and max_rows > 0:
             df_raw = df_raw.head(max_rows)
 
         payload = compute_themes_payload(
             df=df_raw,
-            start_date=start_iso,
-            end_date=end_iso,
+            start_date=start,
+            end_date=end,
             n_clusters=n_clusters,
             openai_api_key=_read_openai_key(),
         )
@@ -570,18 +573,18 @@ def themes(
             content={
                 "error": str(e),
                 "hint": "Check OpenAI key, sklearn/torch availability, date range, and data paths.",
-                "trace_tail": tb.splitlines()[-6:],
+                "trace_tail": tb.splitlines()[-10:],
             },
         )
 
 
-# --- Tweets drill-down for a theme ---
+# --- Tweets drill-down for a theme (reads STAGE3_THEMES_PARQUET) ---
 @_alias("/themes/{theme_id}/tweets")
 def theme_tweets(
     theme_id: int,
     limit: int = Query(default=10, ge=1, le=200),
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
 ):
     if not os.path.exists(STAGE3_THEMES_PARQUET):
         return {"items": [], "note": "Stage-3 parquet not found. Call /themes first to generate."}
@@ -594,9 +597,9 @@ def theme_tweets(
     if date_col:
         df3[date_col] = pd.to_datetime(df3[date_col], errors="coerce")
         if start:
-            df3 = df3[df3[date_col] >= pd.to_datetime(_parse_date_str(start))]
+            df3 = df3[df3[date_col] >= pd.to_datetime(start)]
         if end:
-            df3 = df3[df3[date_col] <= pd.to_datetime(_parse_date_str(end))]
+            df3 = df3[df3[date_col] <= pd.to_datetime(end)]
 
     sub = df3[df3["theme"] == int(theme_id)].copy()
     if sub.empty:
@@ -666,7 +669,7 @@ def sample_tweets(
         return {"tweets": [], "count": 0, "aspect": aspect, "sentiment": sentiment}
 
     text_col = None
-    for col in ["text", "clean_tweet", "text_used", "fulltext", "tweet_text"]:
+    for col in ["text", "clean_tweet", "text_used", "fulltext", "tweet_text", "text_clean"]:
         if col in filtered.columns:
             text_col = col
             break
@@ -694,7 +697,6 @@ def download_raw_tweets(
 ):
     mask = (df["date_only"] >= start) & (df["date_only"] <= end)
     sub = df.loc[mask]
-
     if sub.empty:
         return {"error": "No data found for the specified date range"}
 
@@ -720,346 +722,3 @@ def download_raw_tweets(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=raw_tweets_{start}_to_{end}.xlsx"},
     )
-
-
-# ---------------- Reports ----------------
-@_alias("/reports/sentiment")
-def download_sentiment_report(
-    start: date = Query(default=SENT_MIN_DATE),
-    end: date = Query(default=SENT_MAX_DATE),
-    format: str = Query(default="pdf", regex="^(pdf|xlsx)$"),
-):
-    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
-    sub = df.loc[mask]
-    if sub.empty:
-        return {"error": "No data found for the specified date range"}
-
-    sentiment_data = _sentiment_summary(sub)
-
-    if format == "xlsx":
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            summary_df = pd.DataFrame([
-                {"Metric": "Total Tweets", "Count": sentiment_data["total"]},
-                {"Metric": "Positive", "Count": sentiment_data["counts"]["positive"], "Percentage": sentiment_data["percent"]["positive"]},
-                {"Metric": "Neutral", "Count": sentiment_data["counts"]["neutral"], "Percentage": sentiment_data["percent"]["neutral"]},
-                {"Metric": "Negative", "Count": sentiment_data["counts"]["negative"], "Percentage": sentiment_data["percent"]["negative"]},
-            ])
-            summary_df.to_excel(writer, sheet_name="Summary", index=False)
-
-        return Response(
-            content=excel_buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=sentiment_report_{start}_to_{end}.xlsx"},
-        )
-
-    html_content = f"""
-    <html>
-    <head><title>Sentiment Analysis Report</title></head>
-    <body>
-        <h1>Sentiment Analysis Report</h1>
-        <p>Date Range: {start} to {end}</p>
-        <h2>Summary</h2>
-        <p>Total Tweets: {sentiment_data['total']}</p>
-        <p>Positive: {sentiment_data['counts']['positive']} ({sentiment_data['percent']['positive']}%)</p>
-        <p>Neutral: {sentiment_data['counts']['neutral']} ({sentiment_data['percent']['neutral']}%)</p>
-        <p>Negative: {sentiment_data['counts']['negative']} ({sentiment_data['percent']['negative']}%)</p>
-    </body>
-    </html>
-    """
-    return Response(
-        content=html_content,
-        media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=sentiment_report_{start}_to_{end}.html"},
-    )
-
-
-@_alias("/reports/aspects")
-def download_aspect_report(
-    start: date = Query(default=ASPECT_MIN_DATE),
-    end: date = Query(default=ASPECT_MAX_DATE),
-    format: str = Query(default="pdf", regex="^(pdf|xlsx)$"),
-):
-    if adf.empty:
-        return {"error": "No aspect data available. Run Stage 2 first."}
-
-    mask = (adf["date_only"] >= start) & (adf["date_only"] <= end)
-    sub = adf.loc[mask]
-    if sub.empty:
-        return {"error": "No data found for the specified date range"}
-
-    dom_counts = sub["aspect_dominant"].value_counts().to_dict()
-    labels = ASPECTS.copy()
-    counts_list = [int(dom_counts.get(a, 0)) for a in labels]
-    total = sum(counts_list) or 1
-    perc_list = [round(c / total * 100, 2) for c in counts_list]
-
-    if format == "xlsx":
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            aspect_df = pd.DataFrame({
-                "Aspect": labels,
-                "Count": counts_list,
-                "Percentage": perc_list,
-            })
-            aspect_df.to_excel(writer, sheet_name="Aspect Summary", index=False)
-
-        return Response(
-            content=excel_buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=aspect_report_{start}_to_{end}.xlsx"},
-        )
-
-    html = f"""
-    <html>
-      <head><title>Aspect Analysis Report</title></head>
-      <body>
-        <h1>Aspect Analysis Report</h1>
-        <p>Date Range: {start} to {end}</p>
-        <h2>Aspect Breakdown</h2>
-        <ul>
-          {''.join([f"<li>{labels[i]}: {counts_list[i]} ({perc_list[i]}%)</li>" for i in range(len(labels))])}
-        </ul>
-      </body>
-    </html>
-    """
-    return Response(
-        content=html,
-        media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=aspect_report_{start}_to_{end}.html"},
-    )
-
-
-@_alias("/reports/themes")
-def download_theme_report(
-    start: date = Query(default=SENT_MIN_DATE),
-    end: date = Query(default=SENT_MAX_DATE),
-    format: str = Query(default="pdf", regex="^(pdf|xlsx)$"),
-):
-    mask = (df["date_only"] >= start) & (df["date_only"] <= end)
-    sub = df.loc[mask]
-    if sub.empty:
-        return {"error": "No data found for the specified date range"}
-
-    html_content = f"""
-    <html>
-    <head><title>Theme Analysis Report</title></head>
-    <body>
-        <h1>Theme Analysis Report</h1>
-        <p>Date Range: {start} to {end}</p>
-        <p>Total Tweets Analyzed: {len(sub)}</p>
-        <h2>Note</h2>
-        <p>Theme analysis requires AI processing. Please use the Theme Analysis page to generate themes first.</p>
-    </body>
-    </html>
-    """
-    return Response(
-        content=html_content,
-        media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=theme_report_{start}_to_{end}.html"},
-    )
-
-
-@_alias("/reports/dashboard")
-def download_dashboard_report(
-    start: date = Query(default=SENT_MIN_DATE),
-    end: date = Query(default=SENT_MAX_DATE),
-    format: str = Query(default="pdf", regex="^(pdf|xlsx)$"),
-):
-    senti = sentiment_summary(start=start, end=end)
-    asp = aspects_summary(start=start, end=end, as_percent=False)
-
-    if format == "xlsx":
-        excel_buffer = BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            pd.DataFrame([
-                {"metric": "total", "value": senti.get("total", 0)},
-                {"metric": "positive", "value": senti["counts"]["positive"], "percent": senti["percent"]["positive"]},
-                {"metric": "neutral", "value": senti["counts"]["neutral"], "percent": senti["percent"]["neutral"]},
-                {"metric": "negative", "value": senti["counts"]["negative"], "percent": senti["percent"]["negative"]},
-            ]).to_excel(writer, sheet_name="Sentiment", index=False)
-
-            pd.DataFrame([
-                {"aspect": a, "count": asp["counts"].get(a, 0), "percent": asp["percent"].get(a, 0.0)}
-                for a in asp.get("labels", [])
-            ]).to_excel(writer, sheet_name="Aspects", index=False)
-
-        return Response(
-            content=excel_buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=dashboard_{start}_to_{end}.xlsx"},
-        )
-
-    html = f"""
-    <html>
-      <head><title>Dashboard Report</title></head>
-      <body>
-        <h1>Analytics Dashboard Report</h1>
-        <p><b>Date Range:</b> {start} to {end}</p>
-
-        <h2>Sentiment Summary</h2>
-        <ul>
-          <li>Total: {senti.get("total", 0)}</li>
-          <li>Positive: {senti["counts"]["positive"]} ({senti["percent"]["positive"]}%)</li>
-          <li>Neutral: {senti["counts"]["neutral"]} ({senti["percent"]["neutral"]}%)</li>
-          <li>Negative: {senti["counts"]["negative"]} ({senti["percent"]["negative"]}%)</li>
-        </ul>
-
-        <h2>Aspect Summary</h2>
-        <ul>
-          {''.join([f"<li>{a}: {asp['counts'].get(a,0)} ({asp['percent'].get(a,0.0)}%)</li>" for a in asp.get("labels",[])])}
-        </ul>
-      </body>
-    </html>
-    """
-    return Response(
-        content=html,
-        media_type="text/html",
-        headers={"Content-Disposition": f"attachment; filename=dashboard_{start}_to_{end}.html"},
-    )
-
-
-@_alias("/reports/theme/{theme_id}")
-def download_theme_tweets_report(
-    theme_id: int,
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
-    limit: int = Query(default=200, ge=1, le=1000),
-):
-    try:
-        themes_df = pd.read_parquet(STAGE3_THEMES_PARQUET)
-        if "theme" not in themes_df.columns:
-            return {"error": "Stage-3 themes parquet missing 'theme' column."}
-
-        theme_tweets = themes_df[themes_df["theme"] == theme_id].copy()
-        if theme_tweets.empty:
-            return {"error": f"No tweets found for theme {theme_id}"}
-
-        if "createdat" in theme_tweets.columns:
-            theme_tweets["createdat"] = pd.to_datetime(theme_tweets["createdat"], errors="coerce")
-            if start:
-                theme_tweets = theme_tweets[theme_tweets["createdat"] >= pd.to_datetime(_parse_date_str(start))]
-            if end:
-                theme_tweets = theme_tweets[theme_tweets["createdat"] <= pd.to_datetime(_parse_date_str(end))]
-
-        if theme_tweets.empty:
-            return {"error": f"No tweets found for theme {theme_id} in the specified date range"}
-
-        sentiment_counts = theme_tweets["sentiment_label"].value_counts()
-        total_tweets = int(len(theme_tweets))
-
-        theme_tweets_display = theme_tweets.head(limit)
-
-        positive_count = int(sentiment_counts.get("positive", 0))
-        negative_count = int(sentiment_counts.get("negative", 0))
-        neutral_count = int(sentiment_counts.get("neutral", 0))
-
-        positive_pct = round((positive_count / total_tweets) * 100, 1) if total_tweets else 0
-        negative_pct = round((negative_count / total_tweets) * 100, 1) if total_tweets else 0
-        neutral_pct = round((neutral_count / total_tweets) * 100, 1) if total_tweets else 0
-
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Theme Report: Theme {theme_id}</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                .header {{ background: #f0f0f0; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
-                .tweet {{ border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 8px; }}
-                .tweet.positive {{ border-left: 4px solid #28a745; }}
-                .tweet.negative {{ border-left: 4px solid #dc3545; }}
-                .tweet.neutral {{ border-left: 4px solid #ffc107; }}
-                .sentiment {{ font-weight: bold; padding: 4px 8px; border-radius: 4px; }}
-                .positive {{ background: #d4edda; color: #155724; }}
-                .negative {{ background: #f8d7da; color: #721c24; }}
-                .neutral {{ background: #fff3cd; color: #856404; }}
-                .date {{ color: #666; font-size: 0.9em; }}
-                .aspect {{ background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }}
-                .download-btn {{
-                    background: #007bff; color: white; padding: 10px 20px; border: none;
-                    border-radius: 5px; cursor: pointer; font-size: 14px; margin-bottom: 20px;
-                }}
-                .download-btn:hover {{ background: #0056b3; }}
-                .sentiment-breakdown {{
-                    background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;
-                    border-left: 4px solid #007bff;
-                }}
-                .sentiment-stats {{
-                    display: flex; justify-content: space-around; margin-top: 10px;
-                }}
-                .sentiment-stat {{
-                    text-align: center; padding: 10px; border-radius: 5px;
-                }}
-                .sentiment-stat.positive {{ background: #d4edda; }}
-                .sentiment-stat.negative {{ background: #f8d7da; }}
-                .sentiment-stat.neutral {{ background: #fff3cd; }}
-                @media print {{ .download-btn {{ display: none; }} }}
-            </style>
-        </head>
-        <body>
-            <button class="download-btn" onclick="window.print()">📄 Print/Download PDF</button>
-
-            <div class="header">
-                <h1>Theme Report: Theme {theme_id}</h1>
-                <p><strong>Total Tweets:</strong> {total_tweets}</p>
-                <p><strong>Date Range:</strong> {start or 'All time'} to {end or 'All time'}</p>
-                <p><strong>Generated:</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            </div>
-
-            <div class="sentiment-breakdown">
-                <h3>Sentiment Analysis</h3>
-                <div class="sentiment-stats">
-                    <div class="sentiment-stat positive">
-                        <strong>Positive</strong><br>
-                        {positive_count} tweets<br>
-                        <strong>{positive_pct}%</strong>
-                    </div>
-                    <div class="sentiment-stat negative">
-                        <strong>Negative</strong><br>
-                        {negative_count} tweets<br>
-                        <strong>{negative_pct}%</strong>
-                    </div>
-                    <div class="sentiment-stat neutral">
-                        <strong>Neutral</strong><br>
-                        {neutral_count} tweets<br>
-                        <strong>{neutral_pct}%</strong>
-                    </div>
-                </div>
-            </div>
-
-            <h2>Tweets</h2>
-            <p><em>Showing first {min(limit, len(theme_tweets_display))} tweets out of {total_tweets}</em></p>
-        """
-
-        for _, tweet in theme_tweets_display.iterrows():
-            sentiment = str(tweet.get("sentiment_label", "neutral"))
-            aspect = str(tweet.get("aspect_dominant", "unknown"))
-            tweet_text = tweet.get("text") or tweet.get("text_clean") or tweet.get("clean_tweet") or "No text available"
-            tweet_date = tweet.get("createdat") or tweet.get("date") or "Unknown date"
-
-            html_content += f"""
-            <div class="tweet {sentiment}">
-                <div style="margin-bottom: 10px;">
-                    <span class="sentiment {sentiment}">{sentiment.title()}</span>
-                    <span class="aspect">{aspect}</span>
-                    <span class="date">{tweet_date}</span>
-                </div>
-                <p>{tweet_text}</p>
-            </div>
-            """
-
-        html_content += """
-        </body>
-        </html>
-        """
-
-        return Response(
-            content=html_content,
-            media_type="text/html",
-            headers={"Content-Disposition": f"attachment; filename=theme_{theme_id}_report_{start or 'all'}_to_{end or 'all'}.html"},
-        )
-
-    except Exception as e:
-        tb = traceback.format_exc()
-        return JSONResponse(status_code=500, content={"error": str(e), "trace_tail": tb.splitlines()[-6:]})

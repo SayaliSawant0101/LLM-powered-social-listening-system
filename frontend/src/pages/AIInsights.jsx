@@ -1,9 +1,10 @@
 // frontend/src/pages/AIInsights.jsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useDate } from "../contexts/DateContext";
-import axios from "axios";
 
-// ✅ reuse the SAME base URL logic used in api.js
+// ----------------------------------------
+// Base URL (same logic as frontend/src/api.js)
+// ----------------------------------------
 const RAILWAY_URL =
   "https://llm-powered-social-listening-system-production.up.railway.app";
 
@@ -17,16 +18,11 @@ const RAW_BASE_URL =
 
 const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
 
-// Long timeout because these endpoints can be slow (LLM)
-const API = axios.create({
-  baseURL: BASE_URL,
-  timeout: 120000, // 2 minutes
-});
-
 export default function AIInsights() {
-  const { start, end, setStart, setEnd, loading: metaLoading } = useDate();
+  const { start, end, meta, setStart, setEnd, loading: metaLoading } = useDate();
   const [briefKeyword, setBriefKeyword] = useState("");
 
+  // Exec Summary + Structured Brief
   const [execData, setExecData] = useState(null);
   const [execLoading, setExecLoading] = useState(false);
   const [execErr, setExecErr] = useState("");
@@ -35,14 +31,14 @@ export default function AIInsights() {
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefErr, setBriefErr] = useState("");
 
-  function _errToString(e) {
-    // Axios-friendly error text
-    const status = e?.response?.status;
-    const data = e?.response?.data;
-    if (status) return `HTTP ${status} ${typeof data === "string" ? data : ""}`.trim();
-    return e?.message || String(e);
-  }
+  // Helpful debug (optional)
+  useMemo(() => {
+    // eslint-disable-next-line no-console
+    console.log("🛰 AIInsights BASE_URL =", BASE_URL);
+    return null;
+  }, []);
 
+  // ---- handlers ----
   async function runExecutiveSummary() {
     if (!start || !end) return;
     try {
@@ -50,13 +46,22 @@ export default function AIInsights() {
       setExecErr("");
       setExecData(null);
 
-      const { data } = await API.get("/api/executive-summary", {
-        params: { start, end, sample_per_sentiment: 250 },
-      });
+      const q = new URLSearchParams({
+        start,
+        end,
+        sample_per_sentiment: String(250),
+      }).toString();
 
-      setExecData(data);
+      const r = await fetch(`${BASE_URL}/api/executive-summary?${q}`);
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}${text ? ` — ${text}` : ""}`);
+      }
+
+      const j = await r.json();
+      setExecData(j);
     } catch (e) {
-      setExecErr(_errToString(e));
+      setExecErr(String(e));
       setExecData(null);
     } finally {
       setExecLoading(false);
@@ -73,15 +78,22 @@ export default function AIInsights() {
       const params = {
         start,
         end,
-        sample_size: 80,
+        sample_size: String(80),
       };
       if (briefKeyword) params.keyword = briefKeyword;
 
-      const { data } = await API.get("/api/structured-brief", { params });
+      const q = new URLSearchParams(params).toString();
 
-      setBriefData(data);
+      const r = await fetch(`${BASE_URL}/api/structured-brief?${q}`);
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}${text ? ` — ${text}` : ""}`);
+      }
+
+      const j = await r.json();
+      setBriefData(j);
     } catch (e) {
-      setBriefErr(_errToString(e));
+      setBriefErr(String(e));
       setBriefData(null);
     } finally {
       setBriefLoading(false);
@@ -94,13 +106,25 @@ export default function AIInsights() {
       <div className="mb-0.5 pt-2 pb-2">
         <div className="flex items-center space-x-2">
           <div className="w-6 h-6 bg-gradient-to-br from-emerald-400 to-cyan-400 rounded-lg flex items-center justify-center shadow-lg ml-2">
-            <svg className="w-3 h-3 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            <svg
+              className="w-3 h-3 text-slate-900"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+              />
             </svg>
           </div>
           <div className="px-2 py-1">
             <h1 className="text-xl font-bold text-white">AI Insights</h1>
-            <p className="text-slate-400 text-sm">Executive summaries and structured analysis</p>
+            <p className="text-slate-400 text-sm">
+              Executive summaries and structured analysis
+            </p>
           </div>
         </div>
       </div>
@@ -111,7 +135,9 @@ export default function AIInsights() {
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
               <div className="w-2 h-2 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-full"></div>
-              <span className="font-semibold text-slate-200 text-sm">Filter Options</span>
+              <span className="font-semibold text-slate-200 text-sm">
+                Filter Options
+              </span>
             </div>
 
             <div className="flex items-center space-x-3">
@@ -128,7 +154,9 @@ export default function AIInsights() {
           {/* Date Card */}
           <div className="flex items-center space-x-1 bg-slate-700/30 backdrop-blur-sm rounded-md border border-slate-600/50 px-3 py-2">
             <div className="w-1 h-1 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-full"></div>
-            <span className="text-xs text-slate-200 font-medium ml-1">Date:</span>
+            <span className="text-xs text-slate-200 font-medium ml-1">
+              Date:
+            </span>
             <input
               type="date"
               value={start || ""}
@@ -161,15 +189,19 @@ export default function AIInsights() {
             <div className="text-xs text-slate-300">
               <p className="font-medium mb-1">How to use filter options:</p>
               <ul className="space-y-1 text-slate-400">
-                <li>• <strong>Date Range:</strong> Select the time period for analysis</li>
-                <li>• <strong>Keyword Filter:</strong> Enter specific terms (e.g., "pricing", "delivery") to focus AI analysis on relevant content</li>
-                <li>• <strong>Leave keyword empty:</strong> AI will analyze all available data for comprehensive insights</li>
+                <li>
+                  • <strong>Date Range:</strong> Select the time period for analysis
+                </li>
+                <li>
+                  • <strong>Keyword Filter:</strong> Enter specific terms (e.g., "pricing", "delivery") to focus AI analysis
+                </li>
+                <li>
+                  • <strong>Leave keyword empty:</strong> AI will analyze all available data
+                </li>
+                <li className="pt-1 opacity-70">
+                  API base: {BASE_URL}
+                </li>
               </ul>
-
-              {/* helpful debug */}
-              <p className="mt-2 text-[11px] text-slate-500">
-                API base: <span className="text-slate-400">{BASE_URL}</span>
-              </p>
             </div>
           </div>
         </div>
@@ -210,7 +242,9 @@ export default function AIInsights() {
                 <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
                 </svg>
-                <span className="text-red-300 font-semibold text-sm">Error: {execErr}</span>
+                <span className="text-red-300 font-semibold text-sm">
+                  Error: {execErr}
+                </span>
               </div>
             </div>
           )}
@@ -271,7 +305,9 @@ export default function AIInsights() {
                 <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
                 </svg>
-                <span className="text-red-300 font-semibold text-sm">Error: {briefErr}</span>
+                <span className="text-red-300 font-semibold text-sm">
+                  Error: {briefErr}
+                </span>
               </div>
             </div>
           )}

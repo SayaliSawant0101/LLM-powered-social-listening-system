@@ -1,33 +1,62 @@
 // frontend/src/pages/AIInsights.jsx
 import React, { useState } from "react";
 import { useDate } from "../contexts/DateContext";
+import axios from "axios";
+
+// ✅ reuse the SAME base URL logic used in api.js
+const RAILWAY_URL =
+  "https://llm-powered-social-listening-system-production.up.railway.app";
+
+const isNetlifyProd =
+  typeof window !== "undefined" &&
+  window.location.hostname.endsWith("netlify.app");
+
+const RAW_BASE_URL =
+  import.meta?.env?.VITE_API_BASE_URL ||
+  (isNetlifyProd ? RAILWAY_URL : "http://localhost:3001");
+
+const BASE_URL = RAW_BASE_URL.replace(/\/+$/, "");
+
+// Long timeout because these endpoints can be slow (LLM)
+const API = axios.create({
+  baseURL: BASE_URL,
+  timeout: 120000, // 2 minutes
+});
 
 export default function AIInsights() {
-  const { start, end, meta, setStart, setEnd, loading: metaLoading } = useDate();
+  const { start, end, setStart, setEnd, loading: metaLoading } = useDate();
   const [briefKeyword, setBriefKeyword] = useState("");
 
-  // -------- NEW: Exec Summary + Structured Brief --------
-  const [execData, setExecData] = useState(null); // {summary, stats, used_llm, ...}
+  const [execData, setExecData] = useState(null);
   const [execLoading, setExecLoading] = useState(false);
   const [execErr, setExecErr] = useState("");
 
-  const [briefData, setBriefData] = useState(null); // {executive_text, structured:{...}}
+  const [briefData, setBriefData] = useState(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefErr, setBriefErr] = useState("");
 
-  // ---- handlers for LLM endpoints ----
+  function _errToString(e) {
+    // Axios-friendly error text
+    const status = e?.response?.status;
+    const data = e?.response?.data;
+    if (status) return `HTTP ${status} ${typeof data === "string" ? data : ""}`.trim();
+    return e?.message || String(e);
+  }
+
   async function runExecutiveSummary() {
     if (!start || !end) return;
     try {
       setExecLoading(true);
       setExecErr("");
-      const q = new URLSearchParams({ start, end, sample_per_sentiment: String(250) }).toString();
-      const r = await fetch(`http://localhost:3001/api/executive-summary?${q}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      setExecData(j);
+      setExecData(null);
+
+      const { data } = await API.get("/api/executive-summary", {
+        params: { start, end, sample_per_sentiment: 250 },
+      });
+
+      setExecData(data);
     } catch (e) {
-      setExecErr(String(e));
+      setExecErr(_errToString(e));
       setExecData(null);
     } finally {
       setExecLoading(false);
@@ -39,18 +68,20 @@ export default function AIInsights() {
     try {
       setBriefLoading(true);
       setBriefErr("");
-      const q = new URLSearchParams({
+      setBriefData(null);
+
+      const params = {
         start,
         end,
-        sample_size: String(80),
-        ...(briefKeyword ? { keyword: briefKeyword } : {}),
-      }).toString();
-      const r = await fetch(`http://localhost:3001/api/structured-brief?${q}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      setBriefData(j);
+        sample_size: 80,
+      };
+      if (briefKeyword) params.keyword = briefKeyword;
+
+      const { data } = await API.get("/api/structured-brief", { params });
+
+      setBriefData(data);
     } catch (e) {
-      setBriefErr(String(e));
+      setBriefErr(_errToString(e));
       setBriefData(null);
     } finally {
       setBriefLoading(false);
@@ -82,7 +113,7 @@ export default function AIInsights() {
               <div className="w-2 h-2 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-full"></div>
               <span className="font-semibold text-slate-200 text-sm">Filter Options</span>
             </div>
-            
+
             <div className="flex items-center space-x-3">
               <input
                 type="text"
@@ -93,14 +124,14 @@ export default function AIInsights() {
               />
             </div>
           </div>
-          
+
           {/* Date Card */}
           <div className="flex items-center space-x-1 bg-slate-700/30 backdrop-blur-sm rounded-md border border-slate-600/50 px-3 py-2">
             <div className="w-1 h-1 bg-gradient-to-r from-emerald-400 to-cyan-400 rounded-full"></div>
             <span className="text-xs text-slate-200 font-medium ml-1">Date:</span>
             <input
               type="date"
-              value={start || ''}
+              value={start || ""}
               onChange={(e) => setStart(e.target.value)}
               className="px-1 py-0.5 bg-slate-800/50 border border-slate-600 rounded text-xs text-white focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400 transition-all ml-0.5"
               disabled={metaLoading}
@@ -108,7 +139,7 @@ export default function AIInsights() {
             <span className="text-slate-400 text-xs ml-0.5">to</span>
             <input
               type="date"
-              value={end || ''}
+              value={end || ""}
               onChange={(e) => setEnd(e.target.value)}
               className="px-1 py-0.5 bg-slate-800/50 border border-slate-600 rounded text-xs text-white focus:ring-1 focus:ring-emerald-400 focus:border-emerald-400 transition-all ml-0.5"
               disabled={metaLoading}
@@ -118,13 +149,13 @@ export default function AIInsights() {
             )}
           </div>
         </div>
-        
+
         {/* Filter Options Explanation */}
         <div className="mt-3 p-3 bg-slate-700/20 rounded-lg border border-slate-600/20">
           <div className="flex items-start space-x-2">
             <div className="w-4 h-4 bg-blue-500/20 rounded-full flex items-center justify-center mt-0.5">
               <svg className="w-2 h-2 text-blue-400" fill="currentColor" viewBox="0 0 8 8">
-                <circle cx="4" cy="4" r="3"/>
+                <circle cx="4" cy="4" r="3" />
               </svg>
             </div>
             <div className="text-xs text-slate-300">
@@ -134,6 +165,11 @@ export default function AIInsights() {
                 <li>• <strong>Keyword Filter:</strong> Enter specific terms (e.g., "pricing", "delivery") to focus AI analysis on relevant content</li>
                 <li>• <strong>Leave keyword empty:</strong> AI will analyze all available data for comprehensive insights</li>
               </ul>
+
+              {/* helpful debug */}
+              <p className="mt-2 text-[11px] text-slate-500">
+                API base: <span className="text-slate-400">{BASE_URL}</span>
+              </p>
             </div>
           </div>
         </div>
@@ -242,7 +278,9 @@ export default function AIInsights() {
 
           {briefData && (
             <div className="space-y-4">
-              {briefData.structured && Array.isArray(briefData.structured.executive_bullets) && briefData.structured.executive_bullets.length > 0 ? (
+              {briefData.structured &&
+              Array.isArray(briefData.structured.executive_bullets) &&
+              briefData.structured.executive_bullets.length > 0 ? (
                 <>
                   {/* Executive Bullets */}
                   <div>
@@ -252,7 +290,10 @@ export default function AIInsights() {
                     </h3>
                     <div className="space-y-2">
                       {briefData.structured.executive_bullets.map((bullet, i) => (
-                        <div key={i} className="flex items-start space-x-2 p-2 bg-slate-700/30 rounded-lg border border-slate-600/20">
+                        <div
+                          key={i}
+                          className="flex items-start space-x-2 p-2 bg-slate-700/30 rounded-lg border border-slate-600/20"
+                        >
                           <span className="w-5 h-5 bg-emerald-500 text-white text-xs rounded-full flex items-center justify-center font-bold mt-0.5">
                             {i + 1}
                           </span>
@@ -263,61 +304,93 @@ export default function AIInsights() {
                   </div>
 
                   {/* Themes */}
-                  {Array.isArray(briefData.structured.themes) && briefData.structured.themes.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
-                        <span className="w-2 h-2 bg-cyan-400 rounded-full"></span>
-                        <span>Key Themes</span>
-                      </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {briefData.structured.themes.map((theme, i) => (
-                          <span key={i} className="px-2 py-1 bg-slate-700/30 text-slate-200 rounded-lg text-xs font-medium border border-slate-600/20">
-                            {theme}
-                          </span>
-                        ))}
+                  {Array.isArray(briefData.structured.themes) &&
+                    briefData.structured.themes.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
+                          <span className="w-2 h-2 bg-cyan-400 rounded-full"></span>
+                          <span>Key Themes</span>
+                        </h3>
+                        <div className="flex flex-wrap gap-2">
+                          {briefData.structured.themes.map((theme, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-1 bg-slate-700/30 text-slate-200 rounded-lg text-xs font-medium border border-slate-600/20"
+                            >
+                              {theme}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
                   {/* Risks */}
-                  {Array.isArray(briefData.structured.risks) && briefData.structured.risks.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
-                        <span className="w-2 h-2 bg-red-400 rounded-full"></span>
-                        <span>Risks</span>
-                      </h3>
-                      <div className="space-y-2">
-                        {briefData.structured.risks.map((risk, i) => (
-                          <div key={i} className="flex items-start space-x-2 p-2 bg-red-500/10 rounded-lg border border-red-500/20">
-                            <svg className="w-4 h-4 text-red-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                            </svg>
-                            <span className="text-slate-200 text-sm">{risk}</span>
-                          </div>
-                        ))}
+                  {Array.isArray(briefData.structured.risks) &&
+                    briefData.structured.risks.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
+                          <span className="w-2 h-2 bg-red-400 rounded-full"></span>
+                          <span>Risks</span>
+                        </h3>
+                        <div className="space-y-2">
+                          {briefData.structured.risks.map((risk, i) => (
+                            <div
+                              key={i}
+                              className="flex items-start space-x-2 p-2 bg-red-500/10 rounded-lg border border-red-500/20"
+                            >
+                              <svg
+                                className="w-4 h-4 text-red-400 mt-0.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
+                                />
+                              </svg>
+                              <span className="text-slate-200 text-sm">{risk}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
                   {/* Opportunities */}
-                  {Array.isArray(briefData.structured.opportunities) && briefData.structured.opportunities.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
-                        <span className="w-2 h-2 bg-green-400 rounded-full"></span>
-                        <span>Opportunities</span>
-                      </h3>
-                      <div className="space-y-2">
-                        {briefData.structured.opportunities.map((opportunity, i) => (
-                          <div key={i} className="flex items-start space-x-2 p-2 bg-green-500/10 rounded-lg border border-green-500/20">
-                            <svg className="w-4 h-4 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                            </svg>
-                            <span className="text-slate-200 text-sm">{opportunity}</span>
-                          </div>
-                        ))}
+                  {Array.isArray(briefData.structured.opportunities) &&
+                    briefData.structured.opportunities.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-white mb-2 flex items-center space-x-2">
+                          <span className="w-2 h-2 bg-green-400 rounded-full"></span>
+                          <span>Opportunities</span>
+                        </h3>
+                        <div className="space-y-2">
+                          {briefData.structured.opportunities.map((opportunity, i) => (
+                            <div
+                              key={i}
+                              className="flex items-start space-x-2 p-2 bg-green-500/10 rounded-lg border border-green-500/20"
+                            >
+                              <svg
+                                className="w-4 h-4 text-green-400 mt-0.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                                />
+                              </svg>
+                              <span className="text-slate-200 text-sm">{opportunity}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
                 </>
               ) : (
                 <div className="bg-slate-700/30 rounded-xl p-4 border border-slate-600/20">

@@ -10,7 +10,8 @@ const RAILWAY_URL =
   "https://llm-powered-social-listening-system-production.up.railway.app";
 
 // Detect if we're running on Netlify (production)
-const isNetlifyProd = typeof window !== "undefined" &&
+const isNetlifyProd =
+  typeof window !== "undefined" &&
   window.location.hostname.endsWith("netlify.app");
 
 // Choose BASE_URL:
@@ -39,12 +40,40 @@ const LONG_API = axios.create({
   timeout: 1200000, // 20 minutes for theme generation
 });
 
-// --- Sentiment ---
+// ----------------------------------------
+// Helpers
+// ----------------------------------------
+function normalizeDateParam(d) {
+  // Accepts: "YYYY-MM-DD" or "MM/DD/YYYY"
+  // Returns: "YYYY-MM-DD" if possible, else original string
+  if (!d) return d;
+
+  // If already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+
+  // If MM/DD/YYYY
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(d);
+  if (m) {
+    const mm = m[1];
+    const dd = m[2];
+    const yyyy = m[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return d;
+}
+
+// ----------------------------------------
+// --- Meta / Health ---
+// ----------------------------------------
 export async function getMeta() {
   const { data } = await API.get("/");
   return data?.date_range || null;
 }
 
+// ----------------------------------------
+// --- Sentiment ---
+// ----------------------------------------
 export async function getSummary(start, end) {
   const { data } = await API.get("/api/sentiment/summary", {
     params: { start, end },
@@ -52,20 +81,16 @@ export async function getSummary(start, end) {
   return data;
 }
 
-export async function getTrend(
-  start,
-  end,
-  period = "daily",
-  offset = 0,
-  limit = 0
-) {
+export async function getTrend(start, end, period = "daily", offset = 0, limit = 0) {
   const { data } = await API.get("/api/sentiment/trend", {
     params: { start, end, period, offset, limit },
   });
   return data;
 }
 
+// ----------------------------------------
 // --- Aspects ---
+// ----------------------------------------
 export async function getAspectSummary(start, end, asPercent = false) {
   const { data } = await API.get("/api/aspects/summary", {
     params: { start, end, as_percent: asPercent },
@@ -80,7 +105,7 @@ export async function getAspectAvgScores(start, end) {
   return data;
 }
 
-// --- Aspect × Sentiment (Stacked Bar) ---
+// --- Aspect × Sentiment (Stacked Bar)
 export async function getAspectSentimentSplit(
   start,
   end,
@@ -107,20 +132,49 @@ export async function getRawAspectData(start, end) {
 }
 
 // Get sample tweets for specific aspect and sentiment
-export async function getSampleTweets(
-  start,
-  end,
-  aspect,
-  sentiment,
-  limit = 10
-) {
+export async function getSampleTweets(start, end, aspect, sentiment, limit = 10) {
   const { data } = await API.get("/api/tweets/sample", {
     params: { start, end, aspect, sentiment, limit },
   });
   return data.tweets || [];
 }
 
-// --- Themes (dynamic clustering + summaries) ---
+// ----------------------------------------
+// ✅ AI INSIGHTS (Executive Summary + Structured Brief)
+// ----------------------------------------
+export async function getExecutiveSummary(start, end, samplePerSentiment = 250) {
+  const { data } = await API.get("/api/executive-summary", {
+    params: {
+      start: normalizeDateParam(start),
+      end: normalizeDateParam(end),
+      sample_per_sentiment: samplePerSentiment,
+    },
+  });
+  return data;
+}
+
+export async function getStructuredBrief(
+  start,
+  end,
+  keyword = null,
+  sampleSize = 50
+) {
+  const params = {
+    start: normalizeDateParam(start),
+    end: normalizeDateParam(end),
+    sample_size: sampleSize,
+  };
+  if (keyword && String(keyword).trim().length > 0) {
+    params.keyword = String(keyword).trim();
+  }
+
+  const { data } = await API.get("/api/structured-brief", { params });
+  return data;
+}
+
+// ----------------------------------------
+// --- Themes (dynamic clustering + summaries)
+// ----------------------------------------
 export async function fetchThemes({
   start = null,
   end = null,
@@ -130,8 +184,8 @@ export async function fetchThemes({
   max_rows = null,
 } = {}) {
   const params = {};
-  if (start) params.start = start;
-  if (end) params.end = end;
+  if (start) params.start = normalizeDateParam(start);
+  if (end) params.end = normalizeDateParam(end);
   if (n_clusters !== null) params.n_clusters = n_clusters;
   if (emb_model) params.emb_model = emb_model;
   if (parquet) params.parquet = parquet;
@@ -143,7 +197,9 @@ export async function fetchThemes({
   return data; // { updated_at, themes: [{id, name, summary, tweet_count}] }
 }
 
+// ----------------------------------------
 // --- Raw Data Downloads ---
+// ----------------------------------------
 export async function downloadRawTweets(start, end, format = "csv") {
   const response = await API.get("/api/tweets/raw", {
     params: { start, end, format },
@@ -222,9 +278,7 @@ export async function downloadDashboardReport(start, end, format = "pdf") {
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `analytics_dashboard_${start || "all"}_to_${
-    end || "all"
-  }.${format}`;
+  link.download = `analytics_dashboard_${start || "all"}_to_${end || "all"}.${format}`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

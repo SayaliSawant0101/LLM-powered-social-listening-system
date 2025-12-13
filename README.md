@@ -1,10 +1,12 @@
 # LLM-powered Social Listening System
 
-> **📋 [View Project Timeline & Milestones on Notion](https://www.notion.so/LLM-powered-Social-Listening-System-28abe5c2ca3180e7a35defa1c99e44e8)**
+## Walmart Social Media Listener
 
-# Walmart Social Media Listener
+🚀 **Live Demo:** https://socialmedialistener.netlify.app/  
+📋 **Project Timeline & Milestones (Notion):** https://www.notion.so/LLM-powered-Social-Listening-System-28abe5c2ca3180e7a35defa1c99e44e8
 
-End‑to‑end pipeline for Twitter/X listening about Walmart: cleaning → sentiment → aspect‑based analysis → unsupervised themes → **LLM executive summaries** → interactive demo.
+End-to-end pipeline for Twitter/X listening about Walmart:  
+**data ingestion → cleaning → sentiment analysis → aspect-based analysis → topic modeling → LLM-generated executive summaries → interactive frontend demo**
 
 ## 1) Quickstart
 

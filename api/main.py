@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, Tuple
 import pandas as pd
 import traceback
@@ -17,7 +17,7 @@ from io import StringIO, BytesIO
 # LLM summaries (exec summary + structured brief)
 from src.llm.summary import build_executive_summary, summarize_tweets
 
-# ---- Theme computation (Stage 3 dynamic) ----
+# Theme computation (Stage 3 dynamic)
 from src.features.themes import compute_themes_payload
 
 # --- Load the repo-root .env no matter where Uvicorn is started from ---
@@ -42,16 +42,13 @@ STAGE3_THEMES_PARQUET = "data/tweets_stage3_themes.parquet"  # written by /theme
 app = FastAPI(title="Walmart Social Listener API")
 
 # ------------------------------------------------------------
-# IMPORTANT FIX:
-# Frontend calls /api/..., but your backend routes were /sentiment/..., /aspects/...
-# This helper registers BOTH routes:
+# Helper: register BOTH routes:
 #   /xyz   and   /api/xyz
 # ------------------------------------------------------------
 def _alias(route_path: str):
     """
     Decorator to register the same endpoint under two paths:
       /xyz   and   /api/xyz
-    Use it like: @_alias("/sentiment/summary")
     """
     def decorator(func):
         app.get(route_path)(func)
@@ -60,11 +57,20 @@ def _alias(route_path: str):
     return decorator
 
 
-# Allow calls from Vite dev server + Netlify (prod + previews)
+# ------------------------------------------------------------
+# ✅ CORS FIX (Netlify + local dev)
+#   - allow_origin_regex handles Netlify previews + prod
+#   - allow_credentials=True prevents browser "Failed to fetch" when credentials/headers are present
+# ------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ],
+    allow_origin_regex=r"https://.*\.netlify\.app",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -179,6 +185,25 @@ def _pick_any_date_col(df: pd.DataFrame) -> Optional[str]:
     return None
 
 
+def _parse_date_str(s: str) -> str:
+    """
+    Accepts:
+      - YYYY-MM-DD
+      - MM/DD/YYYY
+    Returns ISO string YYYY-MM-DD.
+    """
+    s = (s or "").strip()
+    if not s:
+        return s
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            pass
+    # if already something else, return as-is (build_executive_summary may handle)
+    return s
+
+
 # ------------ Load Sentiment (Stage 1) ------------
 if not os.path.exists(SENTI_PATH):
     raise FileNotFoundError(f"Missing parquet: {SENTI_PATH}. Run Stage 1 first.")
@@ -217,7 +242,10 @@ if os.path.exists(STAGE3_PATH):
 _THEMES_CACHE: dict[Tuple[Optional[str], Optional[str], int, str], dict] = {}
 
 # ------------ Routes ------------
+
 @app.get("/")
+@app.get("/api")
+@app.get("/api/")
 def health():
     return {
         "message": "✅ Walmart Sentiment API is running!",
@@ -252,11 +280,10 @@ def sentiment_summary(
 def sentiment_trend(
     start: date = Query(default=SENT_MIN_DATE),
     end: date = Query(default=SENT_MAX_DATE),
-    period: str = Query(default="daily"),  # frontend passes this sometimes
+    period: str = Query(default="daily"),
     offset: int = Query(default=0),
     limit: int = Query(default=0),
 ):
-    # period/offset/limit are accepted to avoid 404/422 from frontend
     mask = (df["date_only"] >= start) & (df["date_only"] <= end)
     sub = df.loc[mask]
     if sub.empty:
@@ -363,7 +390,6 @@ def aspects_sentiment_split(
     as_percent: bool = Query(default=False),
     include_others: bool = Query(default=False),
 ):
-    # If cache exists and no dates are provided, use cache
     if start is None and end is None and stage3_df is not None:
         s3 = stage3_df.set_index("aspect_dominant").reindex(ASPECTS, fill_value=0)
         for c in ["positive", "neutral", "negative"]:
@@ -375,12 +401,12 @@ def aspects_sentiment_split(
         labels = ASPECTS.copy()
         counts = {
             "positive": [int(x) for x in s3["positive"].tolist()],
-            "neutral": [int(x) for x in s3["neutral"].tolist()],
+            "neutral":  [int(x) for x in s3["neutral"].tolist()],
             "negative": [int(x) for x in s3["negative"].tolist()],
         }
         percent = {
             "positive": [float(x) for x in pct["positive"].tolist()],
-            "neutral": [float(x) for x in pct["neutral"].tolist()],
+            "neutral":  [float(x) for x in pct["neutral"].tolist()],
             "negative": [float(x) for x in pct["negative"].tolist()],
         }
 
@@ -414,8 +440,7 @@ def aspects_sentiment_split(
                 percent["neutral"].append(0.0)
                 percent["negative"].append(0.0)
 
-        payload = {"labels": labels, "counts": counts, "percent": percent}
-        return payload
+        return {"labels": labels, "counts": counts, "percent": percent}
 
     s = start or ASPECT_MIN_DATE
     e = end or ASPECT_MAX_DATE
@@ -424,26 +449,25 @@ def aspects_sentiment_split(
 
     mask = (adf["date_only"] >= s) & (adf["date_only"] <= e)
     sub = adf.loc[mask, ["aspect_dominant", "sentiment_label"]]
-    payload = _aspect_split_from_subset(sub, ASPECTS, include_others)
-
-    # If frontend wants percent arrays instead of counts arrays, it can use payload["percent"].
-    # We keep payload shape stable.
-    return payload
+    return _aspect_split_from_subset(sub, ASPECTS, include_others)
 
 
-# --- Executive summary over a date window (LLM-powered with fallback) ---
+# --- Executive summary (LLM-powered) ---
 @_alias("/executive-summary")
 def executive_summary(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end: str = Query(..., description="YYYY-MM-DD"),
+    start: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
+    end: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
     sample_per_sentiment: int = Query(default=250, ge=50, le=500),
 ):
     try:
+        start_iso = _parse_date_str(start)
+        end_iso = _parse_date_str(end)
+
         result = build_executive_summary(
             df_senti=df,
             df_aspects=adf,
-            start=start,
-            end=end,
+            start=start_iso,
+            end=end_iso,
             openai_api_key=_read_openai_key(),
             sample_per_sentiment=sample_per_sentiment,
         )
@@ -459,12 +483,15 @@ def executive_summary(
 # --- Structured brief ---
 @_alias("/structured-brief")
 def structured_brief(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end: str = Query(..., description="YYYY-MM-DD"),
+    start: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
+    end: str = Query(..., description="YYYY-MM-DD or MM/DD/YYYY"),
     keyword: Optional[str] = Query(default=None),
     sample_size: int = Query(default=50, ge=20, le=200),
 ):
     try:
+        start_iso = _parse_date_str(start)
+        end_iso = _parse_date_str(end)
+
         df_for_llm = df.copy()
 
         if "date" in df_for_llm.columns:
@@ -489,8 +516,8 @@ def structured_brief(
 
         res = summarize_tweets(
             df=df_for_llm,
-            start_date=start,
-            end_date=end,
+            start_date=start_iso,
+            end_date=end_iso,
             keyword=keyword,
             sample_size=sample_size,
         )
@@ -506,27 +533,30 @@ def structured_brief(
 # --- Themes (dynamic clustering + summaries) ---
 @_alias("/themes")
 def themes(
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
     n_clusters: Optional[int] = Query(default=None, ge=1, le=8),
     emb_model: str = Query(default="sentence-transformers/all-MiniLM-L6-v2"),
     merge_similar: bool = Query(default=True),
-    parquet: Optional[str] = Query(default=None),   # accepted (frontend may send)
-    max_rows: Optional[int] = Query(default=None),  # accepted (frontend may send)
+    parquet: Optional[str] = Query(default=None),
+    max_rows: Optional[int] = Query(default=None),
 ):
     key = (start, end, n_clusters or 0, emb_model)
     if key in _THEMES_CACHE:
         del _THEMES_CACHE[key]
 
     try:
+        start_iso = _parse_date_str(start) if start else None
+        end_iso = _parse_date_str(end) if end else None
+
         df_raw = pd.read_parquet(parquet or RAW_TWEETS_PATH)
         if isinstance(max_rows, int) and max_rows > 0:
             df_raw = df_raw.head(max_rows)
 
         payload = compute_themes_payload(
             df=df_raw,
-            start_date=start,
-            end_date=end,
+            start_date=start_iso,
+            end_date=end_iso,
             n_clusters=n_clusters,
             openai_api_key=_read_openai_key(),
         )
@@ -545,13 +575,13 @@ def themes(
         )
 
 
-# --- Tweets drill-down for a theme (reads STAGE3_THEMES_PARQUET) ---
+# --- Tweets drill-down for a theme ---
 @_alias("/themes/{theme_id}/tweets")
 def theme_tweets(
     theme_id: int,
     limit: int = Query(default=10, ge=1, le=200),
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
 ):
     if not os.path.exists(STAGE3_THEMES_PARQUET):
         return {"items": [], "note": "Stage-3 parquet not found. Call /themes first to generate."}
@@ -564,9 +594,9 @@ def theme_tweets(
     if date_col:
         df3[date_col] = pd.to_datetime(df3[date_col], errors="coerce")
         if start:
-            df3 = df3[df3[date_col] >= pd.to_datetime(start)]
+            df3 = df3[df3[date_col] >= pd.to_datetime(_parse_date_str(start))]
         if end:
-            df3 = df3[df3[date_col] <= pd.to_datetime(end)]
+            df3 = df3[df3[date_col] <= pd.to_datetime(_parse_date_str(end))]
 
     sub = df3[df3["theme"] == int(theme_id)].copy()
     if sub.empty:
@@ -750,7 +780,6 @@ def download_aspect_report(
     end: date = Query(default=ASPECT_MAX_DATE),
     format: str = Query(default="pdf", regex="^(pdf|xlsx)$"),
 ):
-    # Use aspects dataframe (adf), not sentiment df
     if adf.empty:
         return {"error": "No aspect data available. Run Stage 2 first."}
 
@@ -759,7 +788,6 @@ def download_aspect_report(
     if sub.empty:
         return {"error": "No data found for the specified date range"}
 
-    # Build aspect counts and percents
     dom_counts = sub["aspect_dominant"].value_counts().to_dict()
     labels = ASPECTS.copy()
     counts_list = [int(dom_counts.get(a, 0)) for a in labels]
@@ -832,7 +860,6 @@ def download_theme_report(
     )
 
 
-# ✅ Frontend expects this path: /api/reports/dashboard
 @_alias("/reports/dashboard")
 def download_dashboard_report(
     start: date = Query(default=SENT_MIN_DATE),
@@ -895,8 +922,8 @@ def download_dashboard_report(
 @_alias("/reports/theme/{theme_id}")
 def download_theme_tweets_report(
     theme_id: int,
-    start: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
-    end: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    start: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
+    end: Optional[str] = Query(default=None, description="YYYY-MM-DD or MM/DD/YYYY"),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
     try:
@@ -908,22 +935,19 @@ def download_theme_tweets_report(
         if theme_tweets.empty:
             return {"error": f"No tweets found for theme {theme_id}"}
 
-        # Date filtering (best-effort)
         if "createdat" in theme_tweets.columns:
             theme_tweets["createdat"] = pd.to_datetime(theme_tweets["createdat"], errors="coerce")
             if start:
-                theme_tweets = theme_tweets[theme_tweets["createdat"] >= pd.to_datetime(start)]
+                theme_tweets = theme_tweets[theme_tweets["createdat"] >= pd.to_datetime(_parse_date_str(start))]
             if end:
-                theme_tweets = theme_tweets[theme_tweets["createdat"] <= pd.to_datetime(end)]
+                theme_tweets = theme_tweets[theme_tweets["createdat"] <= pd.to_datetime(_parse_date_str(end))]
 
         if theme_tweets.empty:
             return {"error": f"No tweets found for theme {theme_id} in the specified date range"}
 
-        # Stats on full filtered set
         sentiment_counts = theme_tweets["sentiment_label"].value_counts()
         total_tweets = int(len(theme_tweets))
 
-        # Limit display
         theme_tweets_display = theme_tweets.head(limit)
 
         positive_count = int(sentiment_counts.get("positive", 0))
